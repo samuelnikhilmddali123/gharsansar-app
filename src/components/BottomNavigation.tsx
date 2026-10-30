@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Platform } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,7 +16,11 @@ export const BottomNavigation: React.FC<BottomNavigationProps> = React.memo(({
   onSelectTab,
 }) => {
   const insets = useSafeAreaInsets();
-  const { cart, setSelectedProductId } = useMobileApp();
+  const { cart, setSelectedProductId, user, isAuthenticated } = useMobileApp();
+
+  const displayName = user?.name || (user as any)?.full_name || '';
+  const displayEmail = user?.email || '';
+  const initialLetter = (displayName.charAt(0) || displayEmail.charAt(0) || 'U').toUpperCase();
 
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
 
@@ -54,11 +58,22 @@ export const BottomNavigation: React.FC<BottomNavigationProps> = React.memo(({
               style={styles.tabButton}
             >
               <View style={styles.iconContainer}>
-                <Feather
-                  name={tab.icon}
-                  size={20}
-                  color={isActive ? activeColor : inactiveColor}
-                />
+                {tab.id === 'account' && isAuthenticated && user ? (
+                  <View
+                    style={[
+                      styles.bottomNavAvatar,
+                      isActive && styles.bottomNavAvatarActive,
+                    ]}
+                  >
+                    <Text style={styles.bottomNavAvatarText}>{initialLetter}</Text>
+                  </View>
+                ) : (
+                  <Feather
+                    name={tab.icon}
+                    size={20}
+                    color={isActive ? activeColor : inactiveColor}
+                  />
+                )}
               </View>
 
               <Text
@@ -130,5 +145,22 @@ const styles = StyleSheet.create({
     color: colors.textInverse,
     fontSize: 9,
     fontWeight: '800',
+  },
+  bottomNavAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bottomNavAvatarActive: {
+    backgroundColor: '#043927',
+  },
+  bottomNavAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
   },
 });

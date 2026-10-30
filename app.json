@@ -2,6 +2,7 @@
   "expo": {
     "name": "ghar_sansar_mobile_app",
     "slug": "ghar_sansar_mobile_app",
+    "scheme": "gharsansar",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -25,7 +26,8 @@
     "plugins": [
       "expo-image",
       "expo-status-bar",
-      "expo-font"
+      "expo-font",
+      "expo-web-browser"
     ]
   }
 }

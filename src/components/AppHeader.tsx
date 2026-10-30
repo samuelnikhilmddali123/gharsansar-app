@@ -1,5 +1,5 @@
 import React from 'react';
-import { StyleSheet, View, Text, TouchableOpacity, Image } from 'react-native';
+import { StyleSheet, View, Text, TouchableOpacity, Image, Platform } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import Svg, { Path, Circle } from 'react-native-svg';
 import { colors, typography, spacing, radius } from '../theme/tokens';
@@ -18,9 +18,13 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
   onAccountPress,
   onCartPress,
 }) => {
-  const { cart, favorites, notifications, setActiveTab, setSelectedProductId } = useMobileApp();
+  const { cart, favorites, notifications, setActiveTab, setSelectedProductId, user, isAuthenticated } = useMobileApp();
   const unreadNotifs = notifications.filter(n => !n.read).length;
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const displayName = user?.name || (user as any)?.full_name || '';
+  const displayEmail = user?.email || '';
+  const initialLetter = (displayName.charAt(0) || displayEmail.charAt(0) || 'U').toUpperCase();
 
   const handleCart = () => {
     setSelectedProductId(null);
@@ -130,7 +134,13 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
           activeOpacity={0.7}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Feather name="user" size={20} color={colors.textPrimary} />
+          {isAuthenticated && user ? (
+            <View style={styles.headerAvatarCircle}>
+              <Text style={styles.headerAvatarInitial}>{initialLetter}</Text>
+            </View>
+          ) : (
+            <Feather name="user" size={20} color={colors.textPrimary} />
+          )}
         </TouchableOpacity>
       </View>
     </View>
@@ -209,6 +219,20 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 3.5,
     backgroundColor: colors.accentRed,
+  },
+  headerAvatarCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#1E293B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerAvatarInitial: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif',
   },
 });
 

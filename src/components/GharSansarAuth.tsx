@@ -40,7 +40,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   showCloseButton = false,
   onClose,
 }) => {
-  const { login, register, requestOtp, verifyOtp } = useMobileApp();
+  const { login, register, requestOtp, verifyOtp, loginWithGoogle } = useMobileApp();
 
   // Screen Mode: 'signin' | 'register'
   const [mode, setMode] = useState<'signin' | 'register'>(initialMode);
@@ -53,6 +53,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
 
   // Feedback & Loading
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -70,6 +71,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   const otpInputRefs = useRef<any[]>([]);
 
   // Register State
+  const [regStep, setRegStep] = useState<'form' | 'otp'>('form');
   const [fullName, setFullName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -77,6 +79,11 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [regOtpDigits, setRegOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
+  const [regFocusedOtpIndex, setRegFocusedOtpIndex] = useState<number | null>(null);
+  const [regResendCountdown, setRegResendCountdown] = useState<number>(0);
+  const [regOtpFeedbackNotice, setRegOtpFeedbackNotice] = useState<string>('Verification code sent to your email address.');
+  const regOtpInputRefs = useRef<any[]>([]);
 
   // Password criteria check
   const criteriaLength = regPassword.length >= 8;
@@ -158,7 +165,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     scrollToField(fieldName);
   };
 
-  // Resend Countdown Timer
+  // Resend Countdown Timer (Login OTP)
   useEffect(() => {
     let timer: any = null;
     if (resendCountdown > 0) {
@@ -171,6 +178,19 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     };
   }, [resendCountdown]);
 
+  // Resend Countdown Timer (Registration OTP)
+  useEffect(() => {
+    let timer: any = null;
+    if (regResendCountdown > 0) {
+      timer = setInterval(() => {
+        setRegResendCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [regResendCountdown]);
+
   const resetErrors = () => {
     setErrorMessage('');
     setSuccessMessage('');
@@ -180,6 +200,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     Keyboard.dismiss();
     resetErrors();
     setMode(newMode);
+    setRegStep('form');
     if (scrollViewRef.current) {
       scrollViewRef.current.scrollTo({ y: 0, animated: false });
     }
@@ -329,18 +350,18 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     }
   };
 
-  // 5. Register Submit
+  // 5. Register: Step 1 Submit (Validate & Send OTP to Email)
   const handleRegister = async () => {
     resetErrors();
     const nameTrim = fullName.trim();
-    const emailTrim = regEmail.trim();
+    const emailTrim = regEmail.trim().toLowerCase();
     const phoneTrim = phone.trim();
 
     if (!nameTrim) {
       setErrorMessage('Please enter your full name.');
       return;
     }
-    if (!emailTrim || !emailTrim.includes('@')) {
+    if (!emailTrim || !emailTrim.includes('@') || !emailTrim.includes('.')) {
       setErrorMessage('Please enter a valid email address.');
       return;
     }
@@ -359,12 +380,24 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
 
     setLoading(true);
     try {
-      const result = await register(nameTrim, emailTrim, regPassword, phoneTrim);
+      const result = await requestOtp(emailTrim);
       if (result.success) {
-        setSuccessMessage('Account created successfully! Welcome to Ghar Sansar.');
-        if (onSuccess) onSuccess();
+        setRegOtpFeedbackNotice(result.message || `Verification code sent to ${emailTrim}`);
+        setRegStep('otp');
+        setRegOtpDigits(['', '', '', '', '', '']);
+        setRegResendCountdown(45);
+        if (scrollViewRef.current) {
+          scrollViewRef.current.scrollTo({ y: 0, animated: true });
+        }
+        setTimeout(() => {
+          regOtpInputRefs.current[0]?.focus();
+        }, 350);
       } else {
-        setErrorMessage(result.error || 'Registration failed. Email or phone may already exist.');
+        setErrorMessage(result.error || 'Failed to send OTP verification code. Please try again.');
+        const match = (result.error || '').match(/(\d+)\s*seconds?/i);
+        if (match && match[1]) {
+          setRegResendCountdown(parseInt(match[1], 10));
+        }
       }
     } catch (err: any) {
       setErrorMessage('Unable to connect to Ghar Sansar backend server.');
@@ -373,23 +406,122 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     }
   };
 
-  const handleGoogleSignIn = () => {
-    Alert.alert(
-      'Google Sign-In',
-      'Connecting to Google OAuth authentication service...',
-      [{ text: 'OK' }]
-    );
+  // 6. Resend Registration OTP
+  const handleResendRegOtp = async () => {
+    if (regResendCountdown > 0 || loading) return;
+    await handleRegister();
+  };
+
+  // 7. Verify OTP & Complete Registration
+  const handleVerifyAndRegister = async () => {
+    resetErrors();
+    const code = regOtpDigits.join('').trim();
+    if (code.length < 6) {
+      setErrorMessage('Please enter all 6 digits of the verification code sent to your email.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const result = await register(
+        fullName.trim(),
+        regEmail.trim().toLowerCase(),
+        regPassword,
+        phone.trim(),
+        code
+      );
+      if (result.success) {
+        setSuccessMessage('Account created successfully! Welcome to Ghar Sansar.');
+        setTimeout(() => {
+          if (onSuccess) onSuccess();
+        }, 400);
+      } else {
+        setErrorMessage(result.error || 'Registration failed. The OTP code may be incorrect or expired.');
+      }
+    } catch (err: any) {
+      setErrorMessage('Unable to connect to Ghar Sansar backend server.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Registration OTP 6-Box Input Change Handler
+  const handleRegOtpDigitChange = (text: string, index: number) => {
+    resetErrors();
+    const cleanNumbers = text.replace(/\D/g, '');
+
+    // Case A: User pasted multi-digit code
+    if (cleanNumbers.length > 1) {
+      const nextDigits = [...regOtpDigits];
+      for (let i = 0; i < cleanNumbers.length; i++) {
+        if (index + i < 6) {
+          nextDigits[index + i] = cleanNumbers[i];
+        }
+      }
+      setRegOtpDigits(nextDigits);
+      const nextFocus = Math.min(index + cleanNumbers.length, 5);
+      regOtpInputRefs.current[nextFocus]?.focus();
+      return;
+    }
+
+    // Case B: Single digit entered
+    const singleDigit = cleanNumbers.slice(-1);
+    const nextDigits = [...regOtpDigits];
+    nextDigits[index] = singleDigit;
+    setRegOtpDigits(nextDigits);
+
+    if (singleDigit && index < 5) {
+      regOtpInputRefs.current[index + 1]?.focus();
+    }
+  };
+
+  // Registration OTP Backspace Handler
+  const handleRegOtpKeyPress = (
+    e: any,
+    index: number
+  ) => {
+    if (e.nativeEvent.key === 'Backspace') {
+      if (regOtpDigits[index] === '' && index > 0) {
+        const nextDigits = [...regOtpDigits];
+        nextDigits[index - 1] = '';
+        setRegOtpDigits(nextDigits);
+        regOtpInputRefs.current[index - 1]?.focus();
+      }
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    resetErrors();
+    setGoogleLoading(true);
+    try {
+      const result = await loginWithGoogle();
+      if (result.success) {
+        if (onSuccess) onSuccess();
+      } else if (result.error && result.error !== 'Authentication cancelled') {
+        setErrorMessage('Unable to sign you in. Please try again.');
+      }
+    } catch (err) {
+      setErrorMessage('Unable to sign you in. Please try again.');
+    } finally {
+      setGoogleLoading(false);
+    }
   };
 
   // Title and subtitle matching design
   const getHeaderTitle = () => {
-    if (mode === 'register') return 'Create Account';
+    if (mode === 'register') {
+      return regStep === 'otp' ? 'Verify Email' : 'Create Account';
+    }
     if (authMethod === 'otp') return 'Sign In with OTP';
     return 'Sign In';
   };
 
   const getHeaderSubtitle = () => {
-    if (mode === 'register') return 'Join our community today';
+    if (mode === 'register') {
+      return regStep === 'otp'
+        ? `Enter the 6-digit code sent to ${regEmail}`
+        : 'Join our community today';
+    }
     if (authMethod === 'otp') return 'Passwordless login with a 6-digit code sent to your email';
     return 'Welcome back! Please enter your details';
   };
@@ -589,14 +721,21 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
             <View style={styles.dividerLine} />
           </View>
 
-          {/* Sign in with Google */}
+          {/* Continue with Google */}
           <TouchableOpacity
-            style={styles.googleButton}
+            style={[styles.googleButton, googleLoading && { opacity: 0.7 }]}
             activeOpacity={0.8}
             onPress={handleGoogleSignIn}
+            disabled={googleLoading || loading}
           >
-            <GoogleIcon size={18} />
-            <Text style={styles.googleButtonText}>Sign in with Google</Text>
+            {googleLoading ? (
+              <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 8 }} />
+            ) : (
+              <GoogleIcon size={18} />
+            )}
+            <Text style={styles.googleButtonText}>
+              {googleLoading ? 'Connecting to Google...' : 'Continue with Google'}
+            </Text>
           </TouchableOpacity>
 
           {/* Switch to Register */}
@@ -665,14 +804,21 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
             <View style={styles.dividerLine} />
           </View>
 
-          {/* Sign in with Google */}
+          {/* Continue with Google */}
           <TouchableOpacity
-            style={styles.googleButton}
+            style={[styles.googleButton, googleLoading && { opacity: 0.7 }]}
             activeOpacity={0.8}
             onPress={handleGoogleSignIn}
+            disabled={googleLoading || loading}
           >
-            <GoogleIcon size={18} />
-            <Text style={styles.googleButtonText}>Sign in with Google</Text>
+            {googleLoading ? (
+              <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 8 }} />
+            ) : (
+              <GoogleIcon size={18} />
+            )}
+            <Text style={styles.googleButtonText}>
+              {googleLoading ? 'Connecting to Google...' : 'Continue with Google'}
+            </Text>
           </TouchableOpacity>
 
           {/* Switch to Register */}
@@ -792,14 +938,21 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
             <View style={styles.dividerLine} />
           </View>
 
-          {/* Sign in with Google */}
+          {/* Continue with Google */}
           <TouchableOpacity
-            style={styles.googleButton}
+            style={[styles.googleButton, googleLoading && { opacity: 0.7 }]}
             activeOpacity={0.8}
             onPress={handleGoogleSignIn}
+            disabled={googleLoading || loading}
           >
-            <GoogleIcon size={18} />
-            <Text style={styles.googleButtonText}>Sign in with Google</Text>
+            {googleLoading ? (
+              <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 8 }} />
+            ) : (
+              <GoogleIcon size={18} />
+            )}
+            <Text style={styles.googleButtonText}>
+              {googleLoading ? 'Connecting to Google...' : 'Continue with Google'}
+            </Text>
           </TouchableOpacity>
 
           {/* Switch to Register */}
@@ -818,7 +971,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
       {/* ============================================================== */}
       {/* 4. CREATE ACCOUNT FORM (REGISTER MODE) */}
       {/* ============================================================== */}
-      {mode === 'register' && (
+      {mode === 'register' && regStep === 'form' && (
         <View style={styles.formSection}>
           {/* Full Name */}
           <View
@@ -1023,6 +1176,30 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
               )}
             </TouchableOpacity>
 
+            {/* Or continue with */}
+            <View style={styles.dividerRow}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerText}>Or continue with</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* Continue with Google */}
+            <TouchableOpacity
+              style={[styles.googleButton, googleLoading && { opacity: 0.7 }]}
+              activeOpacity={0.8}
+              onPress={handleGoogleSignIn}
+              disabled={googleLoading || loading}
+            >
+              {googleLoading ? (
+                <ActivityIndicator size="small" color="#4285F4" style={{ marginRight: 8 }} />
+              ) : (
+                <GoogleIcon size={18} />
+              )}
+              <Text style={styles.googleButtonText}>
+                {googleLoading ? 'Connecting to Google...' : 'Continue with Google'}
+              </Text>
+            </TouchableOpacity>
+
             {/* Switch to Sign In */}
             <TouchableOpacity
               onPress={() => handleSwitchMode('signin')}
@@ -1034,6 +1211,130 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
               </Text>
             </TouchableOpacity>
           </View>
+        </View>
+      )}
+
+      {/* ============================================================== */}
+      {/* 5. REGISTRATION OTP VERIFICATION STEP */}
+      {/* ============================================================== */}
+      {mode === 'register' && regStep === 'otp' && (
+        <View style={styles.formSection}>
+          {/* Header Row: Enter 6-Digit Code + Change/Edit Details */}
+          <View style={styles.otpHeaderRow}>
+            <Text style={styles.otpLabel}>Enter 6-Digit Code</Text>
+            <TouchableOpacity
+              onPress={() => {
+                setRegStep('form');
+                resetErrors();
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.changeEmailText}>Edit Details</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* 6 Individual Square Digit Boxes */}
+          <View
+            style={styles.otpBoxesRow}
+            onLayout={(e) => {
+              fieldLayouts.current['regOtpDigits'] = e.nativeEvent.layout;
+            }}
+          >
+            {regOtpDigits.map((digit, idx) => {
+              const isFocused = regFocusedOtpIndex === idx;
+              return (
+                <View
+                  key={idx}
+                  style={[
+                    styles.otpBox,
+                    isFocused && styles.otpBoxFocused,
+                    digit !== '' && styles.otpBoxFilled,
+                  ]}
+                >
+                  <TextInput
+                    ref={(el) => {
+                      regOtpInputRefs.current[idx] = el;
+                    }}
+                    style={styles.otpInput}
+                    keyboardType="number-pad"
+                    maxLength={idx === 0 ? 6 : 1}
+                    value={digit}
+                    onChangeText={(txt) => handleRegOtpDigitChange(txt, idx)}
+                    onKeyPress={(e) => handleRegOtpKeyPress(e, idx)}
+                    onFocus={() => {
+                      setRegFocusedOtpIndex(idx);
+                      handleFocusField('regOtpDigits');
+                    }}
+                    onBlur={() => setRegFocusedOtpIndex(null)}
+                    selectTextOnFocus
+                    caretHidden={false}
+                  />
+                </View>
+              );
+            })}
+          </View>
+
+          {/* Mint Green Verification Banner */}
+          <View style={styles.verificationBanner}>
+            <Text style={styles.verificationBannerText}>{regOtpFeedbackNotice}</Text>
+          </View>
+
+          {/* Didn't receive code? Resend in 45s */}
+          <View style={styles.resendRow}>
+            <Text style={styles.resendQuestion}>Didn’t receive code?</Text>
+            {regResendCountdown > 0 ? (
+              <Text style={styles.resendCountdown}>
+                Resend in {regResendCountdown}s
+              </Text>
+            ) : (
+              <TouchableOpacity
+                onPress={handleResendRegOtp}
+                disabled={loading}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.resendAction}>Resend OTP</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* VERIFY & CREATE ACCOUNT Button */}
+          <TouchableOpacity
+            style={styles.primaryButtonForestGreen}
+            activeOpacity={0.85}
+            onPress={handleVerifyAndRegister}
+            disabled={loading}
+          >
+            {loading ? (
+              <ActivityIndicator color="#FFFFFF" size="small" />
+            ) : (
+              <Text style={styles.primaryButtonText}>VERIFY & CREATE ACCOUNT</Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Back to Form */}
+          <TouchableOpacity
+            onPress={() => {
+              setRegStep('form');
+              resetErrors();
+            }}
+            activeOpacity={0.7}
+            style={styles.switchRow}
+          >
+            <Text style={styles.switchLinkRed}>
+              ← BACK TO REGISTRATION FORM
+            </Text>
+          </TouchableOpacity>
+
+          {/* Switch to Sign In */}
+          <TouchableOpacity
+            onPress={() => handleSwitchMode('signin')}
+            activeOpacity={0.7}
+            style={styles.switchRow}
+          >
+            <Text style={styles.switchLinkRed}>
+              ALREADY HAVE AN ACCOUNT? SIGN IN
+            </Text>
+          </TouchableOpacity>
         </View>
       )}
       </ScrollView>

@@ -436,7 +436,7 @@ export const ProfileView: React.FC = () => {
               {ordersLoading ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color="#031c03" />
-                  <Text style={styles.loadingText}>Fetching orders from backend...</Text>
+                  <Text style={styles.loadingText}>Loading...</Text>
                 </View>
               ) : orders.length === 0 ? (
                 <View style={styles.emptyOrdersBox}>
@@ -745,7 +745,7 @@ export const ProfileView: React.FC = () => {
               {ordersLoading ? (
                 <View style={styles.loadingBox}>
                   <ActivityIndicator size="small" color="#031c03" />
-                  <Text style={styles.loadingText}>Fetching real customer orders...</Text>
+                  <Text style={styles.loadingText}>Loading...</Text>
                 </View>
               ) : orders.length === 0 ? (
                 <View style={styles.emptyOrdersBox}>

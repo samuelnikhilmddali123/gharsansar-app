@@ -1,8 +1,25 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Platform } from 'react-native';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
+import { Platform, Linking } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+WebBrowser.maybeCompleteAuthSession();
+
+export const extractAuthCodeFromUrl = (url: string): string | null => {
+  if (!url) return null;
+  if (!url.startsWith('gharsansar://') && !url.includes('auth/callback')) return null;
+  try {
+    const queryPart = url.includes('?') ? url.split('?')[1] : '';
+    if (!queryPart) return null;
+    const params = new URLSearchParams(queryPart);
+    return params.get('code') || null;
+  } catch {
+    const match = url.match(/[?&]code=([^&#]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
+  }
+};
 
 try {
   Notifications.setNotificationHandler({
@@ -162,7 +179,9 @@ interface MobileAppContextType {
   isAuthenticated: boolean;
   authLoading: boolean;
   login: (emailOrPhone: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  register: (name: string, email: string, password: string, phone?: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
+  exchangeMobileCode: (code: string) => Promise<{ success: boolean; error?: string; isProfileIncomplete?: boolean }>;
+  register: (name: string, email: string, password: string, phone?: string, otp?: string) => Promise<{ success: boolean; error?: string }>;
   requestOtp: (email: string) => Promise<{ success: boolean; message?: string; error?: string; expiresInSeconds?: number }>;
   verifyOtp: (email: string, otp: string) => Promise<{ success: boolean; user?: UserProfile; token?: string; error?: string }>;
   logout: () => Promise<void>;
@@ -1246,6 +1265,202 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
+  // Reusable helper to set authenticated session, tokens, address, and profile
+  const applyAuthenticatedSession = async (userObj: any, token: string) => {
+    setAuthToken(token);
+    setUser(userObj);
+    setIsAuthenticated(true);
+    setAuthModalVisible(false);
+
+    await AsyncStorage.setItem(AUTH_TOKEN_KEY, token);
+    await AsyncStorage.setItem('token', token);
+    await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(userObj));
+
+    if (userObj.addresses && userObj.addresses.length > 0) {
+      const def = userObj.addresses.find((a: any) => a.isDefault) || userObj.addresses[0];
+      setCurrentAddress(def);
+      await AsyncStorage.setItem('user_shipping_address', JSON.stringify(def));
+    } else if (userObj.street_address) {
+      const backendAddr = {
+        name: userObj.name || (userObj as any).full_name || 'Customer',
+        phone: userObj.phone || '',
+        address: userObj.street_address,
+        city: userObj.city || '',
+        state: userObj.state || 'Andhra Pradesh',
+        zipCode: userObj.pincode || '',
+        isDefault: true,
+      };
+      setCurrentAddress(backendAddr);
+      await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
+    } else {
+      setCurrentAddress(null);
+      await AsyncStorage.removeItem('user_shipping_address');
+    }
+
+    syncOnLogin(userObj, token);
+  };
+
+  // Replay & race condition protection for OAuth codes (Requirement 6)
+  const processedAuthCodesRef = useRef<Set<string>>(new Set());
+  const isExchangingRef = useRef<boolean>(false);
+
+  const exchangeMobileCode = async (
+    code: string
+  ): Promise<{ success: boolean; error?: string; isProfileIncomplete?: boolean }> => {
+    if (!code || typeof code !== 'string') {
+      return { success: false, error: 'Invalid authorization code' };
+    }
+    const cleanCode = code.trim();
+    if (!cleanCode) {
+      return { success: false, error: 'Invalid authorization code' };
+    }
+
+    // Requirement 6: Prevent Duplicate Code Processing
+    if (processedAuthCodesRef.current.has(cleanCode) || isExchangingRef.current) {
+      console.log('[Google Auth Bridge] Code already processing or already exchanged. Skipping duplicate.');
+      return { success: false, error: 'Authorization code already processed.' };
+    }
+
+    isExchangingRef.current = true;
+    processedAuthCodesRef.current.add(cleanCode);
+    setAuthLoading(true);
+
+    try {
+      console.log('[Google Auth Bridge] Exchanging one-time code with backend...');
+
+      // 1. Primary endpoint: POST https://gharsansar.website/api/v1/auth/exchange-code
+      let response: Response | null = await fetch('https://gharsansar.website/api/v1/auth/exchange-code', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({ code: cleanCode }),
+      }).catch((e) => {
+        console.warn('[Google Auth Bridge] Primary endpoint network error:', e.message);
+        return null;
+      });
+
+      // 2. Resilient fallback to backend domain if website proxy is unreachable or 5xx
+      if (!response || !response.ok) {
+        console.log('[Google Auth Bridge] Trying backend direct exchange endpoint...');
+        const altRes = await fetch(`${BACKEND_URL}/api/v1/auth/exchange-code`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ code: cleanCode }),
+        }).catch(() => null);
+
+        if (altRes && altRes.ok) {
+          response = altRes;
+        } else {
+          // 3. Fallback to /mobile-code/exchange endpoint
+          const altRes2 = await fetch(`${BACKEND_URL}/api/v1/auth/mobile-code/exchange`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({ code: cleanCode }),
+          }).catch(() => null);
+          if (altRes2 && altRes2.ok) {
+            response = altRes2;
+          }
+        }
+      }
+
+      if (!response) {
+        return { success: false, error: 'Unable to sign you in. Please try again.' };
+      }
+
+      const data = await response.json().catch(() => null);
+
+      if (response.ok && data && (data.success || data.token) && data.user) {
+        const activeToken = data.token || data.legacyToken || `user_token_${data.user.id || data.user._id}`;
+        await applyAuthenticatedSession(data.user, activeToken);
+
+        if (data.isProfileIncomplete) {
+          setActiveTab('account');
+          return { success: true, isProfileIncomplete: true };
+        } else {
+          setActiveTab('home');
+          return { success: true, isProfileIncomplete: false };
+        }
+      }
+
+      return {
+        success: false,
+        error: data?.error || data?.message || 'Unable to sign you in. Please try again.',
+      };
+    } catch (err: any) {
+      console.warn('[Google Auth Bridge] Code exchange exception:', err);
+      return { success: false, error: 'Unable to sign you in. Please try again.' };
+    } finally {
+      isExchangingRef.current = false;
+      setAuthLoading(false);
+    }
+  };
+
+  const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setAuthLoading(true);
+      const authUrl = 'https://gharsansar.website/mobile-auth?redirect_uri=gharsansar://auth/callback';
+
+      console.log('[Google Auth Bridge] Launching Chrome Custom Tab / Auth Session...');
+      const result = await WebBrowser.openAuthSessionAsync(authUrl, 'gharsansar://auth/callback');
+
+      if (result.type === 'success' && result.url) {
+        const code = extractAuthCodeFromUrl(result.url);
+        if (code) {
+          return await exchangeMobileCode(code);
+        } else {
+          return { success: false, error: 'Unable to sign you in. Please try again.' };
+        }
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        console.log('[Google Auth Bridge] Browser dismissed by user.');
+        return { success: false, error: 'Authentication cancelled' };
+      }
+
+      return { success: false, error: 'Unable to sign you in. Please try again.' };
+    } catch (err: any) {
+      console.warn('[Google Auth Bridge] WebBrowser error:', err);
+      return { success: false, error: 'Unable to sign you in. Please try again.' };
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Deep link listener for all 3 Android lifecycle states (Cold Start, Background, Foreground)
+  useEffect(() => {
+    // Test 3: App Completely Closed (Cold start)
+    Linking.getInitialURL()
+      .then((url) => {
+        if (url) {
+          const code = extractAuthCodeFromUrl(url);
+          if (code) {
+            exchangeMobileCode(code);
+          }
+        }
+      })
+      .catch((e) => console.warn('[DeepLink] Initial URL check error:', e));
+
+    // Test 1 & 2: App Open (Foreground) or App in Background
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      if (url) {
+        const code = extractAuthCodeFromUrl(url);
+        if (code) {
+          exchangeMobileCode(code);
+        }
+      }
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
   // 2. Verify OTP & Authenticate
   const verifyOtp = async (email: string, otp: string): Promise<{ success: boolean; user?: UserProfile; token?: string; error?: string }> => {
     try {
@@ -1262,35 +1477,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const data = await res.json();
       if (res.ok && data.success && data.user) {
         const activeToken = data.token || data.legacyToken || `user_token_${data.user.id || data.user._id}`;
-        setAuthToken(activeToken);
-        setUser(data.user);
-        setIsAuthenticated(true);
-        await AsyncStorage.setItem(AUTH_TOKEN_KEY, activeToken);
-        await AsyncStorage.setItem('token', activeToken);
-        await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(data.user));
-
-        if (data.user.addresses && data.user.addresses.length > 0) {
-          const def = data.user.addresses.find((a: any) => a.isDefault) || data.user.addresses[0];
-          setCurrentAddress(def);
-          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(def));
-        } else if (data.user.street_address) {
-          const backendAddr = {
-            name: data.user.name || (data.user as any).full_name || 'Customer',
-            phone: data.user.phone || '',
-            address: data.user.street_address,
-            city: data.user.city || '',
-            state: data.user.state || 'Andhra Pradesh',
-            zipCode: data.user.pincode || '',
-            isDefault: true,
-          };
-          setCurrentAddress(backendAddr);
-          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
-        } else {
-          setCurrentAddress(null);
-          await AsyncStorage.removeItem('user_shipping_address');
-        }
-
-        syncOnLogin(data.user, activeToken);
+        await applyAuthenticatedSession(data.user, activeToken);
         return { success: true, user: data.user, token: activeToken };
       }
       return {
@@ -1313,33 +1500,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const data = await res.json();
       if (res.ok && data.success && data.user) {
         const activeToken = data.token || `user_token_${data.user.id || data.user._id}`;
-        setAuthToken(activeToken);
-        setUser(data.user);
-        setIsAuthenticated(true);
-        await AsyncStorage.setItem(AUTH_TOKEN_KEY, activeToken);
-        await AsyncStorage.setItem('token', activeToken);
-        await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(data.user));
-        if (data.user.addresses && data.user.addresses.length > 0) {
-          const def = data.user.addresses.find((a: any) => a.isDefault) || data.user.addresses[0];
-          setCurrentAddress(def);
-          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(def));
-        } else if (data.user.street_address) {
-          const backendAddr = {
-            name: data.user.name || (data.user as any).full_name || 'Customer',
-            phone: data.user.phone || '',
-            address: data.user.street_address,
-            city: data.user.city || '',
-            state: data.user.state || 'Andhra Pradesh',
-            zipCode: data.user.pincode || '',
-            isDefault: true,
-          };
-          setCurrentAddress(backendAddr);
-          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
-        } else {
-          setCurrentAddress(null);
-          await AsyncStorage.removeItem('user_shipping_address');
-        }
-        syncOnLogin(data.user, activeToken);
+        await applyAuthenticatedSession(data.user, activeToken);
         return { success: true };
       }
       return { success: false, error: data.error || 'Invalid credentials' };
@@ -1349,23 +1510,24 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  const register = async (name: string, email: string, password: string, phone?: string): Promise<{ success: boolean; error?: string }> => {
+  const register = async (name: string, email: string, password: string, phone?: string, otp?: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const res = await fetch(`${BACKEND_URL}/api/auth/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), email: email.trim(), password, phone: phone?.trim() || '' })
+        body: JSON.stringify({
+          name: name.trim(),
+          full_name: name.trim(),
+          email: email.trim(),
+          password,
+          phone: phone?.trim() || '',
+          otp: otp?.trim() || '',
+        })
       });
       const data = await res.json();
       if (res.ok && data.success && data.user) {
         const activeToken = data.token || `user_token_${data.user.id || data.user._id}`;
-        setAuthToken(activeToken);
-        setUser(data.user);
-        setIsAuthenticated(true);
-        await AsyncStorage.setItem(AUTH_TOKEN_KEY, activeToken);
-        await AsyncStorage.setItem('token', activeToken);
-        await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(data.user));
-        syncOnLogin(data.user, activeToken);
+        await applyAuthenticatedSession(data.user, activeToken);
         return { success: true };
       }
       return { success: false, error: data.error || 'Registration failed' };
@@ -1821,6 +1983,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         isAuthenticated,
         authLoading,
         login,
+        loginWithGoogle,
+        exchangeMobileCode,
         register,
         requestOtp,
         verifyOtp,
