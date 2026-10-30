@@ -23,7 +23,6 @@ const CartView: React.FC = () => {
     placeOrder,
     user,
     isAuthenticated,
-    setAuthModalVisible,
   } = useMobileApp();
 
   const insets = useSafeAreaInsets();
@@ -36,10 +35,12 @@ const CartView: React.FC = () => {
   const [addrName, setAddrName] = useState(currentAddress?.name || user?.name || '');
   const [addrPhone, setAddrPhone] = useState(currentAddress?.phone || user?.phone || '');
   const [addrStreet, setAddrStreet] = useState(currentAddress?.address || '');
-  const [addrCity, setAddrCity] = useState(currentAddress?.city || 'Vijayawada');
-  const [addrState, setAddrState] = useState(currentAddress?.state || 'Andhra Pradesh');
-  const [addrZip, setAddrZip] = useState(currentAddress?.zipCode || '520001');
+  const [addrCity, setAddrCity] = useState(currentAddress?.city || '');
+  const [addrState, setAddrState] = useState(currentAddress?.state || '');
+  const [addrZip, setAddrZip] = useState(currentAddress?.zipCode || '');
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [showConfirmModal, setShowConfirmModal] = useState(false);
+  const [orderSuccessData, setOrderSuccessData] = useState<{ orderId: string } | null>(null);
 
   const selectedItems = cart.filter((item) => item.selected);
   const allSelected = cart.length > 0 && cart.every((item) => item.selected);
@@ -49,10 +50,13 @@ const CartView: React.FC = () => {
     toggleAllCartSelections(!allSelected);
   };
 
-  // Subtotal & MRP calculations
-  const rawSubtotal = selectedItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  // Subtotal & MRP calculations (Controlled Two-Price Architecture: Strike Price vs Actual Price)
+  const rawSubtotal = selectedItems.reduce(
+    (sum, item) => sum + (item.product.actualPrice || item.product.price) * item.quantity,
+    0
+  );
   const rawMrpTotal = selectedItems.reduce(
-    (sum, item) => sum + (item.product.actPrice || item.product.price) * item.quantity,
+    (sum, item) => sum + (item.product.strikePrice || item.product.actPrice || item.product.price) * item.quantity,
     0
   );
   const productSavings = Math.max(0, rawMrpTotal - rawSubtotal);
@@ -82,22 +86,32 @@ const CartView: React.FC = () => {
 
   const handleSaveAddress = async () => {
     if (!addrStreet.trim()) {
-      Alert.alert('Required', 'Please enter your street address.');
+      Alert.alert('Required', 'Please enter your street address / house no.');
+      return;
+    }
+    if (!addrCity.trim()) {
+      Alert.alert('Required', 'Please enter your city.');
+      return;
+    }
+    if (!addrZip.trim()) {
+      Alert.alert('Required', 'Please enter your postal pincode.');
       return;
     }
     await saveShippingAddress({
       name: addrName.trim() || user?.name || 'Customer',
       phone: addrPhone.trim() || user?.phone || '',
       address: addrStreet.trim(),
-      city: addrCity.trim() || 'Vijayawada',
+      city: addrCity.trim(),
       state: addrState.trim() || 'Andhra Pradesh',
-      zipCode: addrZip.trim() || '520001',
+      zipCode: addrZip.trim(),
       isDefault: true,
     });
     setShowAddressModal(false);
+    Alert.alert('Address Saved', 'Your delivery address has been saved.');
   };
 
   const executeOrderPlacement = async () => {
+    setShowConfirmModal(false);
     if (!currentAddress || !currentAddress.address) {
       setShowAddressModal(true);
       return;
@@ -105,10 +119,11 @@ const CartView: React.FC = () => {
 
     setCheckoutLoading(true);
     const orderPayload = {
+      userId: user?.id || (user as any)?._id || user?.email || 'guest',
       customer: {
-        firstName: (currentAddress.name || user?.name || 'Customer').split(' ')[0],
-        lastName: (currentAddress.name || user?.name || 'Customer').split(' ').slice(1).join(' ') || '',
-        email: user?.email || 'guest@gharsansar.com',
+        firstName: (currentAddress.name || user?.name || (user as any)?.full_name || 'Customer').split(' ')[0],
+        lastName: (currentAddress.name || user?.name || (user as any)?.full_name || 'Customer').split(' ').slice(1).join(' ') || '',
+        email: user?.email || 'customer@gharsansar.website',
         phone: currentAddress.phone || user?.phone || '9999999999',
         address: currentAddress.address,
         city: currentAddress.city,
@@ -117,17 +132,34 @@ const CartView: React.FC = () => {
         country: 'India',
         notes: appliedCoupon ? `Coupon applied: ${appliedCoupon}` : ''
       },
+      shippingAddress: {
+        firstName: (currentAddress.name || user?.name || (user as any)?.full_name || 'Customer').split(' ')[0],
+        lastName: (currentAddress.name || user?.name || (user as any)?.full_name || 'Customer').split(' ').slice(1).join(' ') || '',
+        phone: currentAddress.phone || user?.phone || '9999999999',
+        address: currentAddress.address,
+        city: currentAddress.city,
+        state: currentAddress.state,
+        zipCode: currentAddress.zipCode,
+        country: 'India',
+        isDefault: true
+      },
       items: selectedItems.map(item => ({
-        id: item.product.id,
+        id: String(item.product.id),
+        productId: String(item.product.id),
         name: item.product.title || item.product.name,
-        price: item.product.price,
+        price: Number(item.product.price) || 0,
         quantity: item.quantity,
-        image: item.product.image
+        image: item.product.image || '',
+        selectedSize: (item as any).selectedSize || '',
+        selectedColor: (item as any).selectedColor || '',
+        isReturnGift: false
       })),
       subtotal: rawSubtotal,
       shipping: 0,
       tax: Math.round(finalTotal * 0.18),
+      discount: couponDiscount,
       total: finalTotal,
+      totalAmount: finalTotal,
       paymentStatus: 'paid',
       paymentMethod: 'Prepaid / UPI',
       paymentId: `pay_mobile_${Date.now()}`
@@ -138,14 +170,7 @@ const CartView: React.FC = () => {
 
     if (res.success) {
       selectedItems.forEach(item => updateCartQuantity(item.product.id, -item.quantity));
-      Alert.alert(
-        'Order Confirmed!',
-        `Your order #${res.orderId} has been placed successfully!\n\nYou can track live status under Account > My Orders.`,
-        [
-          { text: 'Continue Shopping', onPress: () => setActiveTab('home') },
-          { text: 'View My Orders', onPress: () => setActiveTab('account') }
-        ]
-      );
+      setOrderSuccessData({ orderId: res.orderId || 'GS-ORD' });
     } else {
       Alert.alert('Order Failed', res.error || 'Failed to place order.');
     }
@@ -157,32 +182,23 @@ const CartView: React.FC = () => {
       return;
     }
 
-    if (!isAuthenticated) {
-      Alert.alert(
-        'Ghar Sansar Sign In',
-        'Sign in to synchronize your order with the website, or continue as guest?',
-        [
-          { text: 'Sign In / Register', onPress: () => setAuthModalVisible(true) },
-          { text: 'Continue as Guest', onPress: () => executeOrderPlacement() },
-          { text: 'Cancel', style: 'cancel' }
-        ]
-      );
+    if (!isAuthenticated || !user) {
+      setActiveTab('account');
       return;
     }
 
-    if (!currentAddress || !currentAddress.address) {
+    if (!currentAddress || !currentAddress.address || !currentAddress.address.trim()) {
+      setAddrName(user?.name || '');
+      setAddrPhone(user?.phone || '');
+      setAddrStreet('');
+      setAddrCity('');
+      setAddrState('');
+      setAddrZip('');
       setShowAddressModal(true);
       return;
     }
 
-    Alert.alert(
-      'Confirm Order',
-      `Deliver ${selectedCount} items to:\n${currentAddress.address}, ${currentAddress.city}\n\nTotal to Pay: ₹${finalTotal.toLocaleString()}`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Place Order', onPress: () => executeOrderPlacement() }
-      ]
-    );
+    setShowConfirmModal(true);
   };
 
   const handleMoveToWishlist = (item: any) => {
@@ -249,14 +265,18 @@ const CartView: React.FC = () => {
                     <Text style={styles.addressDeliverTo}>Deliver to:</Text>
                     <View style={styles.homeTag}>
                       <Text style={styles.homeTagText}>
-                        {currentAddress?.name ? currentAddress.name.toUpperCase() : 'DESTINATION'}
+                        {!isAuthenticated
+                          ? 'GUEST'
+                          : (currentAddress?.name ? currentAddress.name.toUpperCase() : (user?.name ? user.name.toUpperCase() : 'DESTINATION'))}
                       </Text>
                     </View>
                   </View>
                   <Text style={styles.addressLine} numberOfLines={1}>
-                    {currentAddress
-                      ? `${currentAddress.address}, ${currentAddress.city} - ${currentAddress.zipCode}`
-                      : 'No address set — tap Add to enter shipping address'}
+                    {!isAuthenticated
+                      ? 'Please sign in to view or enter delivery address'
+                      : (currentAddress && currentAddress.address?.trim()
+                          ? `${currentAddress.address}, ${currentAddress.city} - ${currentAddress.zipCode}`
+                          : 'No address set — tap Add to enter shipping address')}
                   </Text>
                 </View>
               </View>
@@ -264,17 +284,21 @@ const CartView: React.FC = () => {
                 style={styles.changeAddressBtn}
                 activeOpacity={0.7}
                 onPress={() => {
+                  if (!isAuthenticated) {
+                    setActiveTab('account');
+                    return;
+                  }
                   setAddrName(currentAddress?.name || user?.name || '');
                   setAddrPhone(currentAddress?.phone || user?.phone || '');
                   setAddrStreet(currentAddress?.address || '');
-                  setAddrCity(currentAddress?.city || 'Vijayawada');
-                  setAddrState(currentAddress?.state || 'Andhra Pradesh');
-                  setAddrZip(currentAddress?.zipCode || '520001');
+                  setAddrCity(currentAddress?.city || '');
+                  setAddrState(currentAddress?.state || '');
+                  setAddrZip(currentAddress?.zipCode || '');
                   setShowAddressModal(true);
                 }}
               >
                 <Text style={styles.changeAddressText}>
-                  {currentAddress ? 'Change' : 'Add'}
+                  {!isAuthenticated ? 'Sign In' : (currentAddress?.address?.trim() ? 'Change' : 'Add')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -307,12 +331,16 @@ const CartView: React.FC = () => {
             {/* 4. Cart Product Items */}
             <View style={styles.itemsList}>
               {cart.map((item) => {
-                const discount =
-                  item.product.actPrice > item.product.price
-                    ? Math.round(
-                        ((item.product.actPrice - item.product.price) / item.product.actPrice) * 100
-                      )
-                    : 0;
+                const itemStrike = item.product.strikePrice || item.product.actPrice || item.product.price;
+                const itemPrice = item.product.actualPrice || item.product.price;
+                const qty = item.quantity || 1;
+                const linePrice = itemPrice * qty;
+                const lineStrike = itemStrike * qty;
+                const hasItemSavings = lineStrike > linePrice;
+                const hasCatPromo = Boolean(item.product.hasCategoryDiscount && item.product.categoryDiscountPercentage > 0);
+                const discount = hasCatPromo
+                  ? item.product.categoryDiscountPercentage
+                  : (item.product.discountPercentage || (hasItemSavings ? Math.round(((lineStrike - linePrice) / lineStrike) * 100) : 0));
 
                 return (
                   <View key={item.product.id} style={styles.cartCard}>
@@ -356,17 +384,24 @@ const CartView: React.FC = () => {
 
                         <View style={styles.priceRow}>
                           <Text style={styles.currentPrice}>
-                            ₹{item.product.price.toLocaleString()}
+                            ₹{linePrice.toLocaleString()}
                           </Text>
-                          {item.product.actPrice > item.product.price && (
+                          {hasItemSavings && (
                             <>
                               <Text style={styles.mrpPrice}>
-                                ₹{item.product.actPrice.toLocaleString()}
+                                ₹{lineStrike.toLocaleString()}
                               </Text>
-                              <Text style={styles.discountBadge}>{discount}% OFF</Text>
+                              <Text style={styles.discountBadge}>
+                                {hasCatPromo ? `${item.product.categoryDiscountPercentage}% OFF` : `${discount}% OFF`}
+                              </Text>
                             </>
                           )}
                         </View>
+                        {qty > 1 && (
+                          <Text style={styles.unitPriceHint}>
+                            (₹{itemPrice.toLocaleString()} each)
+                          </Text>
+                        )}
                       </View>
                     </View>
 
@@ -524,12 +559,36 @@ const CartView: React.FC = () => {
 
               {productSavings + couponDiscount > 0 && (
                 <View style={styles.totalSavingsBanner}>
-                  <Feather name="check" size={14} color={tokens.colors.savings} />
+                  <Feather name="check" size={15} color={tokens.colors.savings} />
                   <Text style={styles.totalSavingsText}>
                     You will save ₹{(productSavings + couponDiscount).toLocaleString()} on this order
                   </Text>
                 </View>
               )}
+
+              {/* Primary In-Card Checkout Button (Proceed to Buy) */}
+              <TouchableOpacity
+                style={[
+                  styles.proceedToBuyBtn,
+                  (selectedCount === 0 || checkoutLoading) && styles.proceedToBuyBtnDisabled,
+                ]}
+                activeOpacity={0.85}
+                onPress={handleCheckout}
+                disabled={checkoutLoading || selectedCount === 0}
+              >
+                {checkoutLoading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <>
+                    <Text style={styles.proceedToBuyBtnText}>
+                      {selectedCount === 0
+                        ? 'Select Items to Buy'
+                        : `Proceed to Buy (${selectedCount} ${selectedCount === 1 ? 'item' : 'items'})`}
+                    </Text>
+                    <Feather name="arrow-right" size={17} color="#FFFFFF" style={{ marginLeft: 8 }} />
+                  </>
+                )}
+              </TouchableOpacity>
             </View>
 
             {/* Trust Badges */}
@@ -679,6 +738,138 @@ const CartView: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      {/* 9. Modern Luxury Confirm Order Modal */}
+      <Modal
+        visible={showConfirmModal}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setShowConfirmModal(false)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalCard}>
+            {/* Top Icon & Title */}
+            <View style={styles.confirmModalHeader}>
+              <View style={styles.confirmModalIconCircle}>
+                <Feather name="check-circle" size={26} color="#059669" />
+              </View>
+              <Text style={styles.confirmModalTitle}>Confirm Order</Text>
+              <Text style={styles.confirmModalSubtitle}>
+                Review your delivery & payment summary
+              </Text>
+            </View>
+
+            {/* Address Box */}
+            <View style={styles.confirmAddressBox}>
+              <View style={styles.confirmAddressHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Feather name="map-pin" size={14} color={tokens.colors.primary} />
+                  <Text style={styles.confirmAddressLabel}>DELIVERING TO</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    setShowConfirmModal(false);
+                    setShowAddressModal(true);
+                  }}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.confirmAddressChangeBtn}>Change</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.confirmAddressName}>
+                {currentAddress?.name || user?.name || 'Customer'}
+                {currentAddress?.phone ? ` • ${currentAddress.phone}` : ''}
+              </Text>
+              <Text style={styles.confirmAddressText} numberOfLines={2}>
+                {currentAddress?.address}, {currentAddress?.city}, {currentAddress?.state} - {currentAddress?.zipCode}
+              </Text>
+            </View>
+
+            {/* Order Details Summary Box */}
+            <View style={styles.confirmSummaryBox}>
+              <View style={styles.confirmSummaryRow}>
+                <Text style={styles.confirmSummaryLabel}>Total Items</Text>
+                <Text style={styles.confirmSummaryVal}>
+                  {selectedCount} {selectedCount === 1 ? 'item' : 'items'}
+                </Text>
+              </View>
+              <View style={styles.confirmSummaryRow}>
+                <Text style={styles.confirmSummaryLabel}>Shipping</Text>
+                <Text style={styles.confirmSummaryFree}>FREE Express Delivery</Text>
+              </View>
+              <View style={[styles.confirmSummaryRow, { borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 10, marginTop: 4 }]}>
+                <Text style={styles.confirmTotalLabel}>Total to Pay</Text>
+                <Text style={styles.confirmTotalAmount}>₹{finalTotal.toLocaleString()}</Text>
+              </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.confirmActionsRow}>
+              <TouchableOpacity
+                style={styles.confirmCancelBtn}
+                onPress={() => setShowConfirmModal(false)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.confirmCancelText}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.confirmPlaceOrderBtn}
+                onPress={executeOrderPlacement}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.confirmPlaceOrderText}>Place Order</Text>
+                <Feather name="arrow-right" size={16} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 10. Modern Luxury Order Success Modal */}
+      <Modal
+        visible={!!orderSuccessData}
+        animationType="fade"
+        transparent={true}
+        onRequestClose={() => setOrderSuccessData(null)}
+      >
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.successModalCard}>
+            <View style={styles.successIconCircle}>
+              <Feather name="check" size={36} color="#FFFFFF" />
+            </View>
+            <Text style={styles.successModalTitle}>Order Confirmed!</Text>
+            <View style={styles.successBadge}>
+              <Text style={styles.successBadgeText}>Order #{orderSuccessData?.orderId}</Text>
+            </View>
+            <Text style={styles.successModalBody}>
+              Thank you for shopping at Ghar Sansar! Your order has been placed successfully and is being prepared for express delivery.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.successViewOrdersBtn}
+              onPress={() => {
+                setOrderSuccessData(null);
+                setActiveTab('account');
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.successViewOrdersText}>View My Orders</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.successContinueBtn}
+              onPress={() => {
+                setOrderSuccessData(null);
+                setActiveTab('home');
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.successContinueText}>Continue Shopping</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 };
@@ -694,7 +885,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: tokens.spacing.lg,
     paddingTop: tokens.spacing.md,
-    paddingBottom: 170, // Ensures content is completely visible above bottom checkout bar
+    paddingBottom: 100, // Ensures content is completely visible above bottom tabs
   },
 
   // Header
@@ -923,6 +1114,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: tokens.colors.discount,
   },
+  unitPriceHint: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: tokens.colors.textMuted,
+    marginTop: 2,
+  },
   cardDivider: {
     height: 1,
     backgroundColor: tokens.colors.borderLight,
@@ -1134,15 +1331,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: 'rgba(46, 125, 50, 0.08)',
-    padding: 8,
-    borderRadius: tokens.radius.sm,
-    marginTop: 6,
+    paddingVertical: 4,
+    marginTop: 8,
   },
   totalSavingsText: {
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: '600',
     color: tokens.colors.savings,
+  },
+  proceedToBuyBtn: {
+    backgroundColor: tokens.colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderRadius: tokens.radius.button,
+    marginTop: 14,
+    width: '100%',
+    ...tokens.shadows.button,
+  },
+  proceedToBuyBtnDisabled: {
+    opacity: 0.5,
+  },
+  proceedToBuyBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    letterSpacing: 0.4,
   },
 
   // Trust Row
@@ -1301,6 +1517,235 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 13,
     letterSpacing: 0.8,
+  },
+
+  // Confirm Order Modal Styles
+  confirmModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+  },
+  confirmModalCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 22,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.2,
+    shadowRadius: 20,
+    elevation: 10,
+  },
+  confirmModalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  confirmModalIconCircle: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#ECFDF5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  confirmModalTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: tokens.colors.primary,
+  },
+  confirmModalSubtitle: {
+    fontSize: 12.5,
+    color: tokens.colors.textMuted,
+    marginTop: 3,
+    textAlign: 'center',
+  },
+  confirmAddressBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
+  },
+  confirmAddressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  confirmAddressLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: tokens.colors.textMuted,
+    letterSpacing: 0.5,
+  },
+  confirmAddressChangeBtn: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: tokens.colors.accent,
+  },
+  confirmAddressName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: tokens.colors.primary,
+    marginBottom: 2,
+  },
+  confirmAddressText: {
+    fontSize: 12,
+    color: tokens.colors.textMuted,
+    lineHeight: 16,
+  },
+  confirmSummaryBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 18,
+  },
+  confirmSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  confirmSummaryLabel: {
+    fontSize: 13,
+    color: tokens.colors.textMuted,
+  },
+  confirmSummaryVal: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: tokens.colors.primary,
+  },
+  confirmSummaryFree: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  confirmTotalLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: tokens.colors.primary,
+  },
+  confirmTotalAmount: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: tokens.colors.primary,
+  },
+  confirmActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  confirmCancelBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmCancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: tokens.colors.primary,
+  },
+  confirmPlaceOrderBtn: {
+    flex: 1.5,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: tokens.colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  confirmPlaceOrderText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+
+  // Success Modal
+  successModalCard: {
+    width: '100%',
+    maxWidth: 350,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 26,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.25,
+    shadowRadius: 24,
+    elevation: 12,
+  },
+  successIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#059669',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  successModalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: tokens.colors.primary,
+    marginBottom: 8,
+  },
+  successBadge: {
+    backgroundColor: '#ECFDF5',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#A7F3D0',
+    marginBottom: 12,
+  },
+  successBadgeText: {
+    fontSize: 12.5,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  successModalBody: {
+    fontSize: 13,
+    color: tokens.colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+    marginBottom: 20,
+  },
+  successViewOrdersBtn: {
+    width: '100%',
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: tokens.colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  successViewOrdersText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  successContinueBtn: {
+    width: '100%',
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successContinueText: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: tokens.colors.textMuted,
   },
 });
 

@@ -47,6 +47,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
+    height: '85%',
     maxHeight: '90%',
     overflow: 'hidden',
     shadowColor: '#000000',

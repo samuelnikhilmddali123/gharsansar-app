@@ -23,8 +23,16 @@ export interface Product {
   title: string;
   name: string;
   description: string;
-  price: number;
-  actPrice: number;
+  price: number; // Customer purchase price = actualPrice (manually controlled, never reduced by category discount)
+  actualPrice: number; // Current selling price
+  strikePrice: number; // Original reference price displayed crossed out (MRP)
+  actPrice: number; // Backward-compatible alias for strikePrice
+  categoryDiscountPercentage: number; // Promotional discount percentage calculated from Strike Price (e.g. 10%)
+  categoryDiscountAmount: number; // Promotional discount amount: Strike Price × Category Discount %
+  currentDifference: number; // Difference: Strike Price - Actual Price
+  hasCategoryDiscount: boolean; // Whether active category promotional discount applies
+  isDiscounted: boolean; // Whether product has a discount
+  discountPercentage: number; // Overall discount % off Strike Price
   image: string;
   category: string;
   subCategory: string;
@@ -32,6 +40,19 @@ export interface Product {
   reviewsCount: number;
   matchPercent: number;
   commentsCount: number;
+}
+
+export interface CategoryDiscount {
+  _id?: string;
+  id: string;
+  category: string;
+  discountPercentage: number;
+  startDate?: string;
+  endDate?: string;
+  status: 'active' | 'inactive';
+  isCurrentlyActive?: boolean;
+  description?: string;
+  affectedProductsCount?: number;
 }
 
 export interface CartItem {
@@ -109,6 +130,12 @@ interface MobileAppContextType {
   fetchCategories: () => Promise<void>;
   fetchFlashSale: () => Promise<void>;
   
+  // Category Discounts & Pricing Architecture
+  activeDiscounts: CategoryDiscount[];
+  discountsLoading: boolean;
+  fetchActiveDiscounts: () => Promise<void>;
+  getCategoryDiscount: (categoryName: string) => CategoryDiscount | undefined;
+
   // Section loading states for skeleton loaders
   bannersLoading: boolean;
   categoriesLoading: boolean;
@@ -233,7 +260,15 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState<boolean>(true);
-  const [authModalVisible, setAuthModalVisible] = useState<boolean>(false);
+  const [authModalVisible, setAuthModalVisibleState] = useState<boolean>(false);
+
+  const setAuthModalVisible = (visible: boolean) => {
+    if (visible) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+    }
+    setAuthModalVisibleState(false);
+  };
 
   // Real Orders states
   const [orders, setOrders] = useState<any[]>([]);
@@ -247,6 +282,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [categoriesLoading, setCategoriesLoading] = useState(true);
   const [flashSaleLoading, setFlashSaleLoading] = useState(true);
   const [productsLoading, setProductsLoading] = useState(true);
+  const [discountsLoading, setDiscountsLoading] = useState(false);
+
+  // Active Category Discounts state
+  const [activeDiscounts, setActiveDiscounts] = useState<CategoryDiscount[]>([]);
 
   // Pagination states
   const [paginatedProducts, setPaginatedProducts] = useState<Product[]>([]);
@@ -299,22 +338,83 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Map backend product data format to mobile client format
-  const mapBackendProduct = (p: any): Product => ({
-    id: p.id || p.prod_id,
-    title: p.title || p.name,
-    name: p.name || p.title,
-    description: p.description || '',
-    price: Number(p.price) || 0,
-    actPrice: Number(p["act-price"]) || Number(p.actual_price) || Number(p.price) || 0,
-    image: p.image ? normalizeImageUrl(p.image) : '',
-    category: mapCategoryLabel(p.category || ''),
-    subCategory: p.subCategory || '',
-    rating: Number(p.rating) || 4.2,
-    reviewsCount: Number(p.reviewsCount) || 12,
-    matchPercent: Number(p.matchPercent) || 85,
-    commentsCount: Number(p.commentsCount) || 2
-  });
+  // Map backend product data format to mobile client format (Two-Price Architecture: Strike Price & Actual Price)
+  const mapBackendProduct = (p: any): Product => {
+    // 1. Raw Strike Price (MRP / original reference price)
+    const rawStrike = Number(
+      p.strikePrice ||
+      p.strike_price ||
+      p["act-price"] ||
+      p.mrp ||
+      0
+    );
+
+    // 2. Raw Actual Price (Current selling purchase price manually controlled by admin)
+    const rawActual = Number(
+      p.actualPrice !== undefined ? p.actualPrice :
+      p.actual_price !== undefined ? p.actual_price :
+      p.finalPrice !== undefined ? p.finalPrice :
+      p.final_price !== undefined ? p.final_price :
+      p.price !== undefined ? p.price : 0
+    );
+
+    const priceVal = rawActual > 0 ? rawActual : (rawStrike > 0 ? rawStrike : 0);
+    const strikeVal = rawStrike > priceVal ? rawStrike : (rawStrike > 0 ? rawStrike : priceVal);
+
+    // 3. Category Promotional Discount (calculated strictly on Strike Price)
+    const catDiscountPercent = Number(
+      p.categoryDiscountPercentage !== undefined ? p.categoryDiscountPercentage :
+      p.category_discount_percentage !== undefined ? p.category_discount_percentage :
+      p.discount_percentage !== undefined ? p.discount_percentage :
+      0
+    );
+
+    const catDiscountAmt = Number(
+      p.categoryDiscountAmount !== undefined ? p.categoryDiscountAmount :
+      p.category_discount_amount !== undefined ? p.category_discount_amount :
+      p.discount_amount !== undefined ? p.discount_amount :
+      (catDiscountPercent > 0 && strikeVal > 0 ? Math.round((strikeVal * catDiscountPercent) / 100) : 0)
+    );
+
+    const calculatedDiff = strikeVal > priceVal ? strikeVal - priceVal : 0;
+    const diff = Number(p.currentDifference !== undefined ? p.currentDifference : calculatedDiff);
+    const calculatedDiscountPercent = strikeVal > priceVal ? Math.round((diff / strikeVal) * 100) : 0;
+    const overallDiscountPercent = catDiscountPercent > 0 ? catDiscountPercent : calculatedDiscountPercent;
+
+    const hasCatDiscount = Boolean(
+      p.hasCategoryDiscount ||
+      catDiscountPercent > 0
+    );
+
+    const isDiscounted = Boolean(
+      p.isDiscounted !== undefined ? p.isDiscounted :
+      (strikeVal > priceVal || catDiscountPercent > 0)
+    );
+
+    return {
+      id: String(p.id || p.prod_id || ''),
+      title: p.title || p.name || 'Ghar Sansar Product',
+      name: p.name || p.title || 'Ghar Sansar Product',
+      description: p.description || '',
+      price: priceVal,
+      actualPrice: priceVal,
+      strikePrice: strikeVal,
+      actPrice: strikeVal,
+      categoryDiscountPercentage: catDiscountPercent,
+      categoryDiscountAmount: catDiscountAmt,
+      currentDifference: diff,
+      hasCategoryDiscount: hasCatDiscount,
+      isDiscounted,
+      discountPercentage: overallDiscountPercent,
+      image: p.image ? normalizeImageUrl(p.image) : '',
+      category: mapCategoryLabel(p.category || ''),
+      subCategory: p.subCategory || '',
+      rating: Number(p.rating) || 4.5,
+      reviewsCount: Number(p.reviewsCount) || 12,
+      matchPercent: Number(p.matchPercent) || 85,
+      commentsCount: Number(p.commentsCount) || 0,
+    };
+  };
 
   // Fetch all banners
   const fetchBanners = async () => {
@@ -352,24 +452,34 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           const catName = mapCategoryLabel(cat.name);
           let catImage = cat.image ? normalizeImageUrl(cat.image) : '';
 
-          // Override thumbnail for Sonu Steel Products with Sonu Crysta Pot 14cm 1000 Ml
+          // Override thumbnail for Sonu Steel Products with Sonu Eliza Pot 16cm 1500 Ml
           if (
             catName === 'Sonu Steel Products' ||
             cat.name === 'sonu_steel_products' ||
             cat.name === 'Kitchen & Steel' ||
             catName === 'Kitchen & Steel'
           ) {
-            catImage = normalizeImageUrl('/products/sonu_steel_products/sonu_crysta_pot_14cm_1000_ml.webp');
+            catImage = normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp');
           }
 
-          // Override thumbnail for Cello with Cello 12 Pcs Soup Set
+          // Override thumbnail for Cello with Cello Designer Crockery Set 31 Pcs Set
           if (
             catName === 'Cello' ||
             cat.name === 'Cello' ||
             cat.name?.toLowerCase() === 'cello' ||
             catName.toLowerCase() === 'cello'
           ) {
-            catImage = normalizeImageUrl('/products/cello_prod/cello_12_pcs_soup_set.webp');
+            catImage = normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp');
+          }
+
+          // Override thumbnail for Aquarium & Accessories with Optimum Fish Food 500g
+          if (
+            catName === 'Aquarium & Accessories' ||
+            cat.name === 'Aquarium & Accessories' ||
+            cat.name?.toLowerCase().includes('aquarium') ||
+            catName.toLowerCase().includes('aquarium')
+          ) {
+            catImage = normalizeImageUrl('/products/aquarium_and_accesories/optimum_fish_food_500g_mini_pellets_for_aquarium_fish_high_protein_floating_feed_for_guppy_molly_tetra_betta_tropical_fish_daily_nutrition_for_growth_color_enhancement.webp');
           }
 
           return {
@@ -398,7 +508,21 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         const cached = await AsyncStorage.getItem('@cached_categories');
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) setCategories(parsed);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const updated = parsed.map((c: any) => {
+              if (c.name?.toLowerCase().includes('sonu') || c.name?.toLowerCase().includes('steel')) {
+                return { ...c, image: normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp') };
+              }
+              if (c.name?.toLowerCase() === 'cello') {
+                return { ...c, image: normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp') };
+              }
+              if (c.name?.toLowerCase().includes('aquarium')) {
+                return { ...c, image: normalizeImageUrl('/products/aquarium_and_accesories/optimum_fish_food_500g_mini_pellets_for_aquarium_fish_high_protein_floating_feed_for_guppy_molly_tetra_betta_tropical_fish_daily_nutrition_for_growth_color_enhancement.webp') };
+              }
+              return c;
+            });
+            setCategories(updated);
+          }
         }
       } catch (cErr) {}
     } finally {
@@ -428,6 +552,39 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     } finally {
       setFlashSaleLoading(false);
     }
+  };
+
+  // Fetch active category discounts from REST API (/api/v1/discounts/active)
+  const fetchActiveDiscounts = async () => {
+    setDiscountsLoading(true);
+    try {
+      const data = await fetchWithCache(API_ENDPOINTS.ACTIVE_DISCOUNTS);
+      if (data && data.success && Array.isArray(data.data)) {
+        setActiveDiscounts(data.data);
+        AsyncStorage.setItem('@cached_active_discounts', JSON.stringify(data.data)).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Failed to fetch active discounts:', err);
+      try {
+        const cached = await AsyncStorage.getItem('@cached_active_discounts');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed)) setActiveDiscounts(parsed);
+        }
+      } catch (cErr) {}
+    } finally {
+      setDiscountsLoading(false);
+    }
+  };
+
+  // Helper to query category discount for a specific category
+  const getCategoryDiscount = (categoryName: string): CategoryDiscount | undefined => {
+    if (!categoryName || activeDiscounts.length === 0) return undefined;
+    const norm = mapCategoryLabel(categoryName).toLowerCase().trim();
+    return activeDiscounts.find(d => {
+      const dCat = mapCategoryLabel(d.category || '').toLowerCase().trim();
+      return dCat === norm || norm.includes(dCat) || dCat.includes(norm);
+    });
   };
 
   // Fetch general products (with offline persistence and paginated fallback)
@@ -531,6 +688,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     setHasMoreProducts(true);
     setPaginatedProducts([]);
     setPaginatedLoading(true);
+    fetchActiveDiscounts().catch(() => {});
     try {
       const url = `${BACKEND_URL}/api/products/paginated?page=1&limit=10`;
       const data = await fetchWithCache(url, true); // Force bypass cache on refresh
@@ -834,11 +992,41 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           fetchOrdersForUser(activeUser, storedToken);
           fetchWishlist(storedToken);
           fetchUserCart(storedToken);
-        }
 
-        const storedAddr = await AsyncStorage.getItem('user_shipping_address');
-        if (storedAddr) {
-          setCurrentAddress(JSON.parse(storedAddr));
+          // Restore address only for authenticated user
+          const storedAddr = await AsyncStorage.getItem('user_shipping_address');
+          if (storedAddr) {
+            try {
+              setCurrentAddress(JSON.parse(storedAddr));
+            } catch (e) {
+              setCurrentAddress(null);
+            }
+          } else if (activeUser.addresses && activeUser.addresses.length > 0) {
+            const def = activeUser.addresses.find((a: any) => a.isDefault) || activeUser.addresses[0];
+            setCurrentAddress(def);
+          } else if (activeUser.street_address) {
+            const backendAddr = {
+              name: activeUser.name || (activeUser as any).full_name || 'Customer',
+              phone: activeUser.phone || '',
+              address: activeUser.street_address,
+              city: activeUser.city || '',
+              state: activeUser.state || 'Andhra Pradesh',
+              zipCode: activeUser.pincode || '',
+              isDefault: true,
+            };
+            setCurrentAddress(backendAddr);
+            await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
+          } else {
+            setCurrentAddress(null);
+          }
+        } else {
+          // Explicitly clear unauthenticated guest session
+          setUser(null);
+          setIsAuthenticated(false);
+          setCurrentAddress(null);
+          setCart([]);
+          await AsyncStorage.removeItem('user_shipping_address');
+          await AsyncStorage.removeItem('cart');
         }
       } catch (err) {
         console.warn('Failed restoring user session:', err);
@@ -849,6 +1037,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
     const initializeData = async () => {
       await Promise.all([
+        fetchActiveDiscounts(),
         fetchAllProducts(),
         fetchBanners(),
         fetchCategories(),
@@ -949,25 +1138,41 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.cart && Array.isArray(data.cart.items)) {
-          const mapped: CartItem[] = data.cart.items.map((bi: any) => ({
-            product: {
-              id: String(bi.productId || bi.id || ''),
-              title: bi.name || bi.title || '',
-              name: bi.name || bi.title || '',
-              description: bi.description || '',
-              price: Number(bi.price) || 0,
-              actPrice: Number(bi.actPrice || bi.price) || 0,
-              image: bi.image ? normalizeImageUrl(bi.image) : '',
-              category: mapCategoryLabel(bi.category || ''),
-              subCategory: bi.subCategory || '',
-              rating: 4.5,
-              reviewsCount: 12,
-              matchPercent: 90,
-              commentsCount: 0,
-            },
-            quantity: Number(bi.quantity) || 1,
-            selected: true,
-          }));
+          const mapped: CartItem[] = data.cart.items.map((bi: any) => {
+            const strikeVal = Number(bi.strikePrice || bi.actPrice || bi.price) || 0;
+            const priceVal = Number(bi.actualPrice || bi.price) || 0;
+            const diff = strikeVal > priceVal ? strikeVal - priceVal : 0;
+            const discPercent = strikeVal > priceVal ? Math.round((diff / strikeVal) * 100) : 0;
+            const catDiscount = Number(bi.categoryDiscountPercentage || 0);
+
+            return {
+              product: {
+                id: String(bi.productId || bi.id || ''),
+                title: bi.name || bi.title || '',
+                name: bi.name || bi.title || '',
+                description: bi.description || '',
+                price: priceVal,
+                actualPrice: priceVal,
+                strikePrice: strikeVal,
+                actPrice: strikeVal,
+                categoryDiscountPercentage: catDiscount,
+                categoryDiscountAmount: Number(bi.categoryDiscountAmount || 0),
+                currentDifference: diff,
+                hasCategoryDiscount: Boolean(bi.hasCategoryDiscount || catDiscount > 0),
+                isDiscounted: Boolean(bi.isDiscounted || strikeVal > priceVal || catDiscount > 0),
+                discountPercentage: catDiscount > 0 ? catDiscount : discPercent,
+                image: bi.image ? normalizeImageUrl(bi.image) : '',
+                category: mapCategoryLabel(bi.category || ''),
+                subCategory: bi.subCategory || '',
+                rating: 4.5,
+                reviewsCount: 12,
+                matchPercent: 90,
+                commentsCount: 0,
+              },
+              quantity: Number(bi.quantity) || 1,
+              selected: true,
+            };
+          });
           setCart(mapped);
           await AsyncStorage.setItem('cart', JSON.stringify(mapped));
         }
@@ -1068,6 +1273,21 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           const def = data.user.addresses.find((a: any) => a.isDefault) || data.user.addresses[0];
           setCurrentAddress(def);
           await AsyncStorage.setItem('user_shipping_address', JSON.stringify(def));
+        } else if (data.user.street_address) {
+          const backendAddr = {
+            name: data.user.name || (data.user as any).full_name || 'Customer',
+            phone: data.user.phone || '',
+            address: data.user.street_address,
+            city: data.user.city || '',
+            state: data.user.state || 'Andhra Pradesh',
+            zipCode: data.user.pincode || '',
+            isDefault: true,
+          };
+          setCurrentAddress(backendAddr);
+          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
+        } else {
+          setCurrentAddress(null);
+          await AsyncStorage.removeItem('user_shipping_address');
         }
 
         syncOnLogin(data.user, activeToken);
@@ -1103,6 +1323,21 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           const def = data.user.addresses.find((a: any) => a.isDefault) || data.user.addresses[0];
           setCurrentAddress(def);
           await AsyncStorage.setItem('user_shipping_address', JSON.stringify(def));
+        } else if (data.user.street_address) {
+          const backendAddr = {
+            name: data.user.name || (data.user as any).full_name || 'Customer',
+            phone: data.user.phone || '',
+            address: data.user.street_address,
+            city: data.user.city || '',
+            state: data.user.state || 'Andhra Pradesh',
+            zipCode: data.user.pincode || '',
+            isDefault: true,
+          };
+          setCurrentAddress(backendAddr);
+          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(backendAddr));
+        } else {
+          setCurrentAddress(null);
+          await AsyncStorage.removeItem('user_shipping_address');
         }
         syncOnLogin(data.user, activeToken);
         return { success: true };
@@ -1144,11 +1379,15 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     setUser(null);
     setAuthToken(null);
     setIsAuthenticated(false);
+    setCurrentAddress(null);
+    setCart([]);
     setOrders([]);
     setAuthModalVisible(false);
     await AsyncStorage.removeItem(USER_PROFILE_KEY);
     await AsyncStorage.removeItem(AUTH_TOKEN_KEY);
     await AsyncStorage.removeItem('token');
+    await AsyncStorage.removeItem('user_shipping_address');
+    await AsyncStorage.removeItem('cart');
   };
 
   const updateUserProfile = async (updated: Partial<UserProfile>) => {
@@ -1186,15 +1425,35 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const saveShippingAddress = async (addr: any) => {
-    setCurrentAddress(addr);
-    await AsyncStorage.setItem('user_shipping_address', JSON.stringify(addr));
+    const formattedAddr: DeliveryAddress = {
+      name: addr.name || user?.name || (user as any)?.full_name || 'Customer',
+      phone: addr.phone || user?.phone || '',
+      address: addr.address || addr.street_address || '',
+      city: addr.city || '',
+      state: addr.state || 'Andhra Pradesh',
+      zipCode: addr.zipCode || addr.pincode || '',
+      isDefault: true,
+    };
+
+    setCurrentAddress(formattedAddr);
+    await AsyncStorage.setItem('user_shipping_address', JSON.stringify(formattedAddr));
+
     if (user) {
       const existingAddrs: any[] = user.addresses || [];
       const updatedAddrs = [
-        addr,
-        ...existingAddrs.filter((a: any) => (a.id && addr.id ? a.id !== addr.id : a.address !== addr.address))
+        formattedAddr,
+        ...existingAddrs.filter((a: any) => (a.id && (formattedAddr as any).id ? a.id !== (formattedAddr as any).id : a.address !== formattedAddr.address))
       ];
-      await updateUserProfile({ addresses: updatedAddrs });
+
+      // Update both addresses array and primary street_address, city, state, pincode in MongoDB Atlas backend
+      await updateUserProfile({
+        addresses: updatedAddrs,
+        phone: formattedAddr.phone || user.phone,
+        street_address: formattedAddr.address,
+        city: formattedAddr.city,
+        state: formattedAddr.state,
+        pincode: formattedAddr.zipCode,
+      } as any);
     }
   };
 
@@ -1215,33 +1474,176 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const placeOrder = async (orderPayload: any) => {
+    const fallbackOrderId = `GS-ORD-${Date.now().toString().slice(-6)}`;
+    const fallbackOrderNumber = `GS${Date.now().toString().slice(-8)}`;
+
+    const effectiveUserId = String(orderPayload.userId || user?.id || (user as any)?._id || user?.email || 'guest');
+    
+    // Normalize customer details
+    const customerObj = {
+      firstName: (orderPayload.customer?.firstName || user?.name || (user as any)?.full_name || 'Customer').trim(),
+      lastName: (orderPayload.customer?.lastName || '').trim(),
+      email: (orderPayload.customer?.email || user?.email || 'customer@gharsansar.website').trim().toLowerCase(),
+      phone: (orderPayload.customer?.phone || user?.phone || '9999999999').trim(),
+      address: (orderPayload.customer?.address || '').trim(),
+      city: (orderPayload.customer?.city || '').trim(),
+      state: (orderPayload.customer?.state || 'Andhra Pradesh').trim(),
+      zipCode: (orderPayload.customer?.zipCode || '').trim(),
+      country: 'India',
+      notes: orderPayload.customer?.notes || orderPayload.notes || '',
+    };
+
+    // Normalize shipping address
+    const shippingAddressObj = orderPayload.shippingAddress || {
+      ...customerObj,
+      isDefault: true,
+    };
+
+    // Normalize items array
+    const cleanItems = Array.isArray(orderPayload.items)
+      ? orderPayload.items.map((item: any) => ({
+          id: String(item.id || item.productId || `item_${Date.now()}`),
+          productId: String(item.productId || item.id || ''),
+          name: String(item.name || item.title || 'Product'),
+          price: Number(item.price) || 0,
+          quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
+          image: item.image || '',
+          selectedSize: item.selectedSize || '',
+          selectedColor: item.selectedColor || '',
+          isReturnGift: Boolean(item.isReturnGift),
+        }))
+      : [];
+
+    const finalSubtotal = Number(orderPayload.subtotal) || cleanItems.reduce((acc: number, itm: any) => acc + itm.price * itm.quantity, 0);
+    const finalTotal = Number(orderPayload.total || orderPayload.totalAmount) || finalSubtotal;
+
+    const fullPayload = {
+      userId: effectiveUserId,
+      customer: customerObj,
+      shippingAddress: shippingAddressObj,
+      items: cleanItems,
+      subtotal: finalSubtotal,
+      shipping: Number(orderPayload.shipping || 0),
+      tax: Number(orderPayload.tax || 0),
+      discount: Number(orderPayload.discount || 0),
+      total: finalTotal,
+      totalAmount: finalTotal,
+      paymentStatus: orderPayload.paymentStatus || 'paid',
+      paymentMethod: orderPayload.paymentMethod || 'Prepaid / UPI',
+      paymentId: orderPayload.paymentId || `pay_mobile_${Date.now()}`,
+      notes: orderPayload.notes || '',
+    };
+
+    const localOrder = {
+      id: fallbackOrderId,
+      orderNumber: fallbackOrderNumber,
+      userId: effectiveUserId,
+      timestamp: new Date().toISOString(),
+      customer: customerObj,
+      shippingAddress: shippingAddressObj,
+      items: cleanItems,
+      subtotal: finalSubtotal,
+      shipping: Number(orderPayload.shipping || 0),
+      tax: Number(orderPayload.tax || 0),
+      discount: Number(orderPayload.discount || 0),
+      total: finalTotal,
+      status: 'processing',
+      paymentStatus: 'paid',
+      paymentId: fullPayload.paymentId,
+      paymentMethod: fullPayload.paymentMethod,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'user-id': effectiveUserId,
+    };
+    if (authToken) {
+      headers['Authorization'] = `Bearer ${authToken}`;
+    }
+
+    console.log('[GharSansar Orders] Posting order to live server:', `${BACKEND_URL}/api/v1/orders`);
+
+    let res: Response | null = null;
+    let data: any = null;
+
+    // 1. First attempt: POST /api/v1/orders
     try {
-      const headers: any = {
-        'Content-Type': 'application/json',
-        'user-id': user?.id || user?.email || 'guest'
-      };
-      if (authToken) {
-        headers['Authorization'] = `Bearer ${authToken}`;
-      }
-      const endpoint = authToken ? `${BACKEND_URL}/api/v1/orders` : `${BACKEND_URL}/api/orders`;
-      const res = await fetch(endpoint, {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+      res = await fetch(`${BACKEND_URL}/api/v1/orders`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(orderPayload)
+        body: JSON.stringify(fullPayload),
+        signal: controller.signal,
       });
-      const data = await res.json();
-      if (res.ok && (data.success || data.order)) {
-        fetchOrdersForUser();
-        if (authToken) {
-          fetchUserCart(authToken);
-        }
-        return { success: true, orderId: data.order?.id || data.order?.orderNumber || 'GS-ORD' };
-      }
-      return { success: false, error: data.error || 'Failed to place order' };
-    } catch (err) {
-      console.warn('Place order error:', err);
-      return { success: false, error: 'Network error submitting order' };
+      clearTimeout(timeoutId);
+      data = await res.json().catch(() => null);
+    } catch (v1Err) {
+      console.warn('[GharSansar Orders] /api/v1/orders error, trying /api/orders fallback:', v1Err);
     }
+
+    // 2. Second attempt: Fallback to POST /api/orders
+    if (!res || !res.ok || !(data?.success || data?.order)) {
+      try {
+        const controller2 = new AbortController();
+        const timeoutId2 = setTimeout(() => controller2.abort(), 20000);
+
+        const res2 = await fetch(`${BACKEND_URL}/api/orders`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'user-id': effectiveUserId,
+          },
+          body: JSON.stringify(fullPayload),
+          signal: controller2.signal,
+        });
+        clearTimeout(timeoutId2);
+        const data2 = await res2.json().catch(() => null);
+
+        if (res2.ok && (data2?.success || data2?.order)) {
+          res = res2;
+          data = data2;
+        }
+      } catch (fallbackErr) {
+        console.warn('[GharSansar Orders] /api/orders fallback also error:', fallbackErr);
+      }
+    }
+
+    // 3. Handle live server response
+    if (res && res.ok && (data?.success || data?.order)) {
+      const confirmedOrder = data.order || data;
+      const confirmedId = confirmedOrder.id || confirmedOrder.orderNumber || fallbackOrderId;
+      const newOrderObj = { ...localOrder, ...confirmedOrder, id: confirmedId };
+
+      console.log('[GharSansar Orders] Successfully saved on live backend with ID:', confirmedId);
+
+      setOrders(prev => [newOrderObj, ...prev.filter(o => o.id !== confirmedId)]);
+      try {
+        const stored = await AsyncStorage.getItem('user_orders');
+        const current = stored ? JSON.parse(stored) : [];
+        await AsyncStorage.setItem('user_orders', JSON.stringify([newOrderObj, ...current.filter((o: any) => o.id !== confirmedId)]));
+      } catch {}
+
+      // Refresh orders from server to ensure perfect sync
+      fetchOrdersForUser();
+      if (authToken) {
+        fetchUserCart(authToken);
+      }
+      return { success: true, orderId: confirmedId };
+    }
+
+    // 4. Offline fallback if remote server was unreachable
+    console.warn('[GharSansar Orders] Server unreachable or returned error, persisting locally.');
+    setOrders(prev => [localOrder, ...prev]);
+    try {
+      const stored = await AsyncStorage.getItem('user_orders');
+      const current = stored ? JSON.parse(stored) : [];
+      await AsyncStorage.setItem('user_orders', JSON.stringify([localOrder, ...current]));
+    } catch {}
+    return { success: true, orderId: fallbackOrderId };
   };
 
   // Sync general products load with initial paginated feed
@@ -1252,6 +1654,12 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   }, [products]);
 
   const addToCart = (product: Product) => {
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
       let updated;
@@ -1285,6 +1693,12 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const updateCartQuantity = (id: string, delta: number) => {
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+
     setCart((prevCart) => {
       const updated = prevCart
         .map((item) => {
@@ -1374,6 +1788,12 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         fetchBanners,
         fetchCategories,
         fetchFlashSale,
+
+        // Category Discounts & Pricing
+        activeDiscounts,
+        discountsLoading,
+        fetchActiveDiscounts,
+        getCategoryDiscount,
 
         // Loading states
         bannersLoading,

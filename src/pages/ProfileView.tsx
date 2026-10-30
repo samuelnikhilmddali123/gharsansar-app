@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMobileApp } from '../context/MobileAppContext';
 import { GharSansarAuth } from '../components/GharSansarAuth';
 import { KeyboardSafeScrollView } from '../components/KeyboardSafeScrollView';
+import { PremiumImage } from '../components/PremiumImage';
 
 export const ProfileView: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -30,6 +31,8 @@ export const ProfileView: React.FC = () => {
     deleteShippingAddress,
     updateUserProfile,
     setActiveTab,
+    setSelectedProductId,
+    products,
   } = useMobileApp();
 
   // Active section tab: 'overview' | 'orders' | 'address' | 'settings'
@@ -455,8 +458,30 @@ export const ProfileView: React.FC = () => {
                     const statusStr = (ord.status || 'Placed').toUpperCase();
                     const isDelivered = statusStr === 'DELIVERED';
                     const isShipped = statusStr === 'SHIPPED';
+                    const firstItem = ord.items?.[0];
+                    const firstItemImage =
+                      firstItem?.image ||
+                      products.find(
+                        (p: any) =>
+                          String(p.id) === String(firstItem?.productId || firstItem?.id) ||
+                          p.title?.toLowerCase() === (firstItem?.name || firstItem?.title || '').toLowerCase()
+                      )?.image ||
+                      '';
+
                     return (
                       <View key={ord.id || ord._id || idx} style={styles.orderItemRow}>
+                        {firstItemImage ? (
+                          <PremiumImage
+                            uri={firstItemImage}
+                            style={styles.recentOrderThumb}
+                            contentFit="contain"
+                            product={{
+                              id: String(firstItem?.productId || firstItem?.id || ''),
+                              title: firstItem?.name || firstItem?.title || 'Product',
+                              category: (firstItem as any)?.category,
+                            }}
+                          />
+                        ) : null}
                         <View style={styles.orderLeftCol}>
                           <Text style={styles.orderNumberText}>
                             Order #{ord.id || ord.orderNumber || (ord._id ? ord._id.slice(-6) : `00${idx + 1}`)}
@@ -758,16 +783,52 @@ export const ProfileView: React.FC = () => {
 
                         {/* Order Items */}
                         <View style={styles.orderItemsContainer}>
-                          {(ord.items || []).map((item: any, itemIdx: number) => (
-                            <View key={itemIdx} style={styles.orderItemLine}>
-                              <Text style={styles.orderItemName} numberOfLines={1}>
-                                {item.name || item.title || 'Product'} × {item.quantity || 1}
-                              </Text>
-                              <Text style={styles.orderItemPrice}>
-                                ₹{Number((item.price || 0) * (item.quantity || 1)).toLocaleString('en-IN')}
-                              </Text>
-                            </View>
-                          ))}
+                          {(ord.items || []).map((item: any, itemIdx: number) => {
+                            const itemImage =
+                              item.image ||
+                              products.find(
+                                (p: any) =>
+                                  String(p.id) === String(item.productId || item.id) ||
+                                  p.title?.toLowerCase() === (item.name || item.title || '').toLowerCase()
+                              )?.image ||
+                              '';
+
+                            return (
+                              <TouchableOpacity
+                                key={itemIdx}
+                                style={styles.orderItemLine}
+                                activeOpacity={0.75}
+                                onPress={() => {
+                                  const prodId = item.productId || item.id;
+                                  if (prodId && setSelectedProductId) {
+                                    setSelectedProductId(String(prodId));
+                                  }
+                                }}
+                              >
+                                <View style={styles.orderItemLeft}>
+                                  <PremiumImage
+                                    uri={itemImage}
+                                    style={styles.orderItemThumb}
+                                    contentFit="contain"
+                                    product={{
+                                      id: String(item.productId || item.id || ''),
+                                      title: item.name || item.title || 'Product',
+                                      category: (item as any)?.category,
+                                    }}
+                                  />
+                                  <View style={styles.orderItemDetails}>
+                                    <Text style={styles.orderItemName} numberOfLines={2}>
+                                      {item.name || item.title || 'Product'}
+                                    </Text>
+                                    <Text style={styles.orderItemQty}>Qty: {item.quantity || 1}</Text>
+                                  </View>
+                                </View>
+                                <Text style={styles.orderItemPrice}>
+                                  ₹{Number((item.price || 0) * (item.quantity || 1)).toLocaleString('en-IN')}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
                         </View>
 
                         {/* Order Footer */}
@@ -1187,23 +1248,58 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderBottomWidth: 1,
     borderColor: '#E2E8F0',
-    paddingVertical: 8,
-    gap: 6,
+    paddingVertical: 10,
+    gap: 8,
   },
   orderItemLine: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
+    paddingVertical: 6,
   },
-  orderItemName: {
-    fontSize: 12.5,
-    color: '#334155',
+  orderItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
     flex: 1,
     marginRight: 10,
   },
+  orderItemThumb: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginRight: 10,
+  },
+  orderItemDetails: {
+    flex: 1,
+  },
+  orderItemName: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#1E293B',
+    marginBottom: 2,
+    lineHeight: 17,
+  },
+  orderItemQty: {
+    fontSize: 11.5,
+    color: '#64748B',
+    fontWeight: '500',
+  },
   orderItemPrice: {
-    fontSize: 12.5,
+    fontSize: 13,
     fontWeight: '700',
     color: '#0F172A',
+  },
+  recentOrderThumb: {
+    width: 42,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginRight: 10,
   },
   orderCardFooter: {
     flexDirection: 'row',

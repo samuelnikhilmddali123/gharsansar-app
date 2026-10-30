@@ -12,6 +12,7 @@ import {
   Modal,
 } from 'react-native';
 import { Feather, FontAwesome, Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { useMobileApp, Product } from '../context/MobileAppContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PremiumImage } from '../components/PremiumImage';
@@ -19,6 +20,7 @@ import ProductCard from '../components/ProductCard';
 import SectionHeader from '../components/SectionHeader';
 import { tokens } from '../theme/tokens';
 import { KeyboardSafeScrollView } from '../components/KeyboardSafeScrollView';
+import Svg, { Path, Circle } from 'react-native-svg';
 
 import { BACKEND_URL } from '../config/api';
 
@@ -111,9 +113,14 @@ const ProductDetailView: React.FC = () => {
     flashSale,
     selectedProductId,
     setSelectedProductId,
+    cart,
     addToCart,
+    updateCartQuantity,
     toggleFavorite,
-    favorites
+    favorites,
+    isAuthenticated,
+    user,
+    setActiveTab,
   } = useMobileApp();
 
   const insets = useSafeAreaInsets();
@@ -205,16 +212,26 @@ const ProductDetailView: React.FC = () => {
   const tagline = getProductTagline(product.category);
   const specifications = getProductSpecs(product);
 
-  const savingsValue = Math.max(0, (product.actPrice || product.price) - product.price);
-  const discountPercent =
-    product.actPrice > product.price
-      ? Math.round((savingsValue / product.actPrice) * 100)
-      : 0;
+  const strike = product.strikePrice || product.actPrice || product.price;
+  const sellingPrice = product.actualPrice || product.price;
+  const savingsValue = Math.max(0, strike - sellingPrice);
+  const calculatedPercent = strike > sellingPrice ? Math.round((savingsValue / strike) * 100) : 0;
+  const hasCategoryPromo = Boolean(product.hasCategoryDiscount && product.categoryDiscountPercentage > 0);
+  const discountPercent = hasCategoryPromo
+    ? product.categoryDiscountPercentage
+    : (product.discountPercentage || calculatedPercent);
 
   // Related products from the same category
   const relatedProducts = products
     .filter((p) => p.category === product.category && p.id !== product.id)
     .slice(0, 6);
+
+  // Cart quantity check for current product
+  const cartItem = cart.find(
+    (item) => item.product?.id === product.id || (item as any).id === product.id
+  );
+  const quantity = cartItem ? cartItem.quantity : 0;
+  const cartCount = useMemo(() => cart.reduce((acc, item) => acc + item.quantity, 0), [cart]);
 
   const handleShare = async () => {
     try {
@@ -227,14 +244,39 @@ const ProductDetailView: React.FC = () => {
   };
 
   const handleAddToCart = () => {
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
     addToCart(product);
-    Alert.alert('Added to Bag', `${product.title} has been added to your shopping bag.`);
   };
 
-  const handleBuyNow = () => {
-    addToCart(product);
-    setSelectedProductId(null);
-    Alert.alert('Proceeding to Checkout', `Item added to bag. Please open your Shopping Bag to complete checkout.`);
+  const handleIncrement = () => {
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    updateCartQuantity(product.id, 1);
+  };
+
+  const handleDecrement = () => {
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    updateCartQuantity(product.id, -1);
   };
 
   const handleCheckPincode = async () => {
@@ -332,11 +374,49 @@ const ProductDetailView: React.FC = () => {
           <TouchableOpacity
             style={styles.headerIconBtn}
             activeOpacity={0.7}
+            onPress={() => {
+              setSelectedProductId(null);
+              setActiveTab('cart');
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <View style={styles.cartIconWrapper}>
+              <Svg width={23} height={20} viewBox="0 0 32 28">
+                <Path
+                  d="M 2 5.5 L 7.5 5.5 L 11.5 17.5 L 22.5 17.5 L 26.5 8"
+                  fill="none"
+                  stroke={tokens.colors.primary}
+                  strokeWidth={2.6}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <Circle cx={13.5} cy={22.5} r={2.2} fill={tokens.colors.primary} />
+                <Circle cx={20.5} cy={22.5} r={2.2} fill={tokens.colors.primary} />
+              </Svg>
+              {cartCount > 0 && (
+                <View style={styles.cartCountContainer} pointerEvents="none">
+                  <Text
+                    style={[
+                      styles.cartCountNumber,
+                      cartCount > 9 && { fontSize: 8.5, letterSpacing: -0.5 },
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {cartCount > 99 ? '99+' : cartCount}
+                  </Text>
+                </View>
+              )}
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.headerIconBtn}
+            activeOpacity={0.7}
             onPress={() => toggleFavorite(product.id)}
           >
             <FontAwesome
               name={isFav ? 'heart' : 'heart-o'}
-              size={20}
+              size={19}
               color={isFav ? tokens.colors.discount : tokens.colors.primary}
             />
           </TouchableOpacity>
@@ -345,7 +425,7 @@ const ProductDetailView: React.FC = () => {
             activeOpacity={0.7}
             onPress={handleShare}
           >
-            <Feather name="share-2" size={20} color={tokens.colors.primary} />
+            <Feather name="share-2" size={19} color={tokens.colors.primary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -369,9 +449,11 @@ const ProductDetailView: React.FC = () => {
               product={product}
               contentFit="contain"
             />
-            {discountPercent > 0 && (
-              <View style={styles.galleryDiscountBadge}>
-                <Text style={styles.galleryDiscountText}>{discountPercent}% OFF</Text>
+            {(discountPercent > 0 || hasCategoryPromo) && (
+              <View style={[styles.galleryDiscountBadge, hasCategoryPromo && styles.categoryDiscountBadge]}>
+                <Text style={styles.galleryDiscountText}>
+                  {hasCategoryPromo ? `${product.categoryDiscountPercentage}% OFF` : `${discountPercent}% OFF`}
+                </Text>
               </View>
             )}
           </TouchableOpacity>
@@ -459,28 +541,39 @@ const ProductDetailView: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* 5. PRICE SECTION (Clean, Not Oversized) */}
+        {/* 5. PRICE SECTION (Clean, Controlled Two-Price Architecture) */}
         <View style={styles.priceSection}>
           <View style={styles.priceTopRow}>
-            {discountPercent > 0 && (
-              <View style={styles.priceDiscountPill}>
-                <Text style={styles.priceDiscountPillText}>{discountPercent}% OFF</Text>
+            {(discountPercent > 0 || hasCategoryPromo) && (
+              <View style={[styles.priceDiscountPill, hasCategoryPromo && styles.categoryDiscountBadge]}>
+                <Text style={styles.priceDiscountPillText}>
+                  {hasCategoryPromo ? `${product.categoryDiscountPercentage}% CATEGORY OFFER` : `${discountPercent}% OFF`}
+                </Text>
               </View>
             )}
-            <Text style={styles.heroPrice}>₹{product.price.toLocaleString()}</Text>
-            {product.actPrice > product.price && (
-              <Text style={styles.heroMrp}>MRP ₹{product.actPrice.toLocaleString()}</Text>
+            <Text style={styles.heroPrice}>₹{sellingPrice.toLocaleString()}</Text>
+            {strike > sellingPrice && (
+              <Text style={styles.heroMrp}>MRP ₹{strike.toLocaleString()}</Text>
             )}
           </View>
 
           <View style={styles.savingsRow}>
             {savingsValue > 0 && (
               <Text style={styles.savingsHighlight}>
-                You Save ₹{savingsValue.toLocaleString()}
+                You Save ₹{savingsValue.toLocaleString()} ({strike > 0 ? Math.round((savingsValue / strike) * 100) : 0}% off MRP)
               </Text>
             )}
             <Text style={styles.taxesMuted}>Inclusive of all taxes</Text>
           </View>
+
+          {hasCategoryPromo && (
+            <View style={styles.categoryPromoCallout}>
+              <Feather name="tag" size={13} color={tokens.colors.savings} />
+              <Text style={styles.categoryPromoCalloutText}>
+                Promotional Category Discount: Flat {product.categoryDiscountPercentage}% off MRP is active!
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* 6. PINCODE & DELIVERY CHECKER */}
@@ -603,29 +696,43 @@ const ProductDetailView: React.FC = () => {
       {/* 10. FIXED BOTTOM PURCHASE BAR (Safe-area aware) */}
       <View style={styles.bottomPurchaseBar}>
         <View style={styles.purchasePriceCol}>
-          <Text style={styles.purchaseCurrentPrice}>₹{product.price.toLocaleString()}</Text>
-          {product.actPrice > product.price && (
-            <Text style={styles.purchaseMrp}>MRP ₹{product.actPrice.toLocaleString()}</Text>
+          <Text style={styles.purchaseCurrentPrice}>₹{sellingPrice.toLocaleString()}</Text>
+          {strike > sellingPrice && (
+            <Text style={styles.purchaseMrp}>MRP ₹{strike.toLocaleString()}</Text>
           )}
         </View>
 
         <View style={styles.purchaseButtonsRow}>
-          <TouchableOpacity
-            style={styles.addToCartBtn}
-            activeOpacity={0.8}
-            onPress={handleAddToCart}
-          >
-            <Feather name="shopping-bag" size={15} color={tokens.colors.primary} />
-            <Text style={styles.addToCartText}>Add to Cart</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.buyNowBtn}
-            activeOpacity={0.85}
-            onPress={handleBuyNow}
-          >
-            <Text style={styles.buyNowText}>Buy Now</Text>
-          </TouchableOpacity>
+          {quantity > 0 ? (
+            <View style={styles.detailStepperContainer}>
+              <TouchableOpacity
+                style={styles.detailStepperBtn}
+                activeOpacity={0.7}
+                onPress={handleDecrement}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Feather name="minus" size={18} color={tokens.colors.savings} />
+              </TouchableOpacity>
+              <Text style={styles.detailStepperValue}>{quantity}</Text>
+              <TouchableOpacity
+                style={styles.detailStepperBtn}
+                activeOpacity={0.7}
+                onPress={handleIncrement}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Feather name="plus" size={18} color={tokens.colors.savings} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.addToCartBtn}
+              activeOpacity={0.85}
+              onPress={handleAddToCart}
+            >
+              <Feather name="shopping-bag" size={16} color="#FFFFFF" />
+              <Text style={styles.addToCartText}>Add to Bag</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -975,6 +1082,26 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
   },
+  categoryDiscountBadge: {
+    backgroundColor: tokens.colors.savings,
+  },
+  categoryPromoCallout: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0, 135, 90, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 135, 90, 0.2)',
+  },
+  categoryPromoCalloutText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: tokens.colors.savings,
+  },
   priceDiscountPillText: {
     color: '#FFFFFF',
     fontSize: 11,
@@ -1205,31 +1332,65 @@ const styles = StyleSheet.create({
   addToCartBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: tokens.colors.surface,
-    borderWidth: 1.5,
-    borderColor: tokens.colors.primary,
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: tokens.radius.button,
-  },
-  addToCartText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: tokens.colors.primary,
-  },
-  buyNowBtn: {
+    gap: 8,
     backgroundColor: tokens.colors.primary,
     paddingVertical: 12,
     paddingHorizontal: 22,
     borderRadius: tokens.radius.button,
+  },
+  detailStepperContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: tokens.colors.surface,
+    borderWidth: 1.5,
+    borderColor: tokens.colors.border,
+    height: 44,
+    minWidth: 120,
+    paddingHorizontal: 6,
+    borderRadius: tokens.radius.button,
+    ...tokens.shadows.subtle,
+  },
+  detailStepperBtn: {
+    width: 32,
+    height: 38,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  buyNowText: {
-    fontSize: 13,
+  detailStepperValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: tokens.colors.primary,
+    minWidth: 24,
+    textAlign: 'center',
+  },
+  addToCartText: {
+    fontSize: 13.5,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  cartIconWrapper: {
+    position: 'relative',
+    width: 24,
+    height: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountContainer: {
+    position: 'absolute',
+    left: 5,
+    width: 14,
+    top: -3,
+    height: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountNumber: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#F08804',
+    textAlign: 'center',
+    lineHeight: 12,
   },
 
   // Modal Review

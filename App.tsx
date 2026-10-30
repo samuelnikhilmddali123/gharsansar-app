@@ -56,9 +56,6 @@ const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) =>
   );
 };
 
-import { AuthModal } from './src/components/AuthModal';
-import { FloatingCartPill } from './src/components/FloatingCartPill';
-
 // ----------------------------------------------------------------------
 // MAIN NAVIGATION & SCREEN ROUTER
 // ----------------------------------------------------------------------
@@ -86,12 +83,6 @@ const AppContent: React.FC = () => {
           <ProfileView />
         )}
       </View>
-
-      {/* Global Interactive Auth Modal */}
-      <AuthModal />
-
-      {/* Floating Popup Cart Pill (Ghar Sansar luxury theme) */}
-      {!isSplashing && <FloatingCartPill />}
 
       {/* Fixed, Solid White, Safe-Area Bottom Navigation (Cart removed as requested) */}
       {!selectedProductId && !isSplashing && (

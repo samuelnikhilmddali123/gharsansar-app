@@ -27,7 +27,7 @@ export interface KeyboardSafeScrollViewProps extends ScrollViewProps {
  * - Handles tap dismissal gracefully with keyboardShouldPersistTaps="handled"
  * - Restores normal screen layout smoothly when keyboard closes
  */
-export const KeyboardSafeScrollView = forwardRef<ScrollView, KeyboardSafeScrollViewProps>(
+export const KeyboardSafeScrollView = forwardRef<any, KeyboardSafeScrollViewProps>(
   (
     {
       children,
@@ -40,11 +40,11 @@ export const KeyboardSafeScrollView = forwardRef<ScrollView, KeyboardSafeScrollV
     },
     ref
   ) => {
-    const scrollRef = useRef<ScrollView>(null);
+    const scrollRef = useRef<any>(null);
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-    useImperativeHandle(ref, () => scrollRef.current as ScrollView);
+    useImperativeHandle(ref, () => scrollRef.current);
 
     useEffect(() => {
       const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';

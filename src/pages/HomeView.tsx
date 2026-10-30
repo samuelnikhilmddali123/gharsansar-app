@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useMobileApp, Product } from '../context/MobileAppContext';
+import { useMobileApp, Product, ORDERED_CATEGORY_NAMES, mapCategoryLabel } from '../context/MobileAppContext';
 import { colors, radius, spacing, typography } from '../theme/tokens';
 import { AppHeader } from '../components/AppHeader';
 import { SearchBar } from '../components/SearchBar';
@@ -21,7 +21,6 @@ import { CategoryCarousel } from '../components/CategoryCarousel';
 import { SectionHeader } from '../components/SectionHeader';
 import { FlashSaleTimer } from '../components/FlashSaleTimer';
 import { ProductCard } from '../components/ProductCard';
-import { FeaturedCollectionCard } from '../components/FeaturedCollectionCard';
 
 const { width: screenWidth } = Dimensions.get('window');
 const GRID_CARD_WIDTH = Math.floor((screenWidth - (spacing.pageHorizontal * 2) - 12) / 2);
@@ -47,6 +46,8 @@ export default function HomeView() {
     fetchBanners,
     fetchCategories,
     fetchFlashSale,
+    activeDiscounts,
+    fetchActiveDiscounts,
     recentlyViewed,
   } = useMobileApp();
 
@@ -64,13 +65,14 @@ export default function HomeView() {
         fetchBanners(),
         fetchCategories(),
         fetchFlashSale(),
+        fetchActiveDiscounts(),
       ]);
     } catch (err) {
       console.warn('Refresh error:', err);
     } finally {
       setRefreshing(false);
     }
-  }, [refreshProductsFeed, fetchAllProducts, fetchBanners, fetchCategories, fetchFlashSale]);
+  }, [refreshProductsFeed, fetchAllProducts, fetchBanners, fetchCategories, fetchFlashSale, fetchActiveDiscounts]);
 
   // Handle banner or category click - navigates directly to that category's products in explore
   const handleCategoryClick = useCallback((categoryName: string) => {
@@ -78,13 +80,105 @@ export default function HomeView() {
     setActiveTab('explore');
   }, [setSelectedCategory, setActiveTab]);
 
-  // Best Sellers (Highest rated or matching Sonu cookware)
+  // Normalize raw category names to customer-friendly titles
+  const normalizeCategory = useCallback((raw?: string): string => {
+    if (!raw) return 'Other';
+    const clean = mapCategoryLabel(raw);
+    const lower = clean.toLowerCase();
+    if (lower.includes('sonu') || lower.includes('steel')) return 'Sonu Steel Products';
+    if (lower.includes('cello')) return 'Cello';
+    if (lower.includes('aquarium')) return 'Aquarium & Accessories';
+    if (lower.includes('lunch')) return 'Lunch Boxes';
+    if (lower.includes('water bottle') || lower.includes('waterbottles') || lower.includes('jars')) return 'Water Bottles & Jars';
+    if (lower.includes('fountain')) return 'Water Fountains';
+    if (lower.includes('rajasthan')) return 'Traditional Rajasthan Idols';
+    if (lower.includes('kondapalli') || lower.includes('toy')) return 'Kondapalli Toys';
+    if (lower.includes('german silver')) return 'German Silver & More';
+    if (lower.includes('ceramic') || lower.includes('pot')) return 'Ceramic Pots';
+    if (lower.includes('artificial plant')) return 'Artificial Plants';
+    if (lower.includes('harshdeep')) return 'Harshdeep Planters';
+    if (lower.includes('garland')) return 'Garlands';
+    if (lower.includes('mat')) return 'Multiple Purpose Mats';
+    if (lower.includes('wallpaper')) return 'Wallpaper Rolls';
+    if (lower.includes('bird')) return 'Birds And Accessories';
+    if (lower.includes('clock')) return 'Wall Clocks';
+    if (lower.includes('garden')) return 'Garden Tools & Compost';
+    if (lower.includes('handicraft')) return 'Handicrafts & Gifts';
+    return clean;
+  }, []);
+
+  // Products grouped by normalized category
+  const productsByCategory = useMemo(() => {
+    const map = new Map<string, Product[]>();
+    if (!products || products.length === 0) return map;
+
+    for (const p of products) {
+      const cat = normalizeCategory(p.category);
+      if (!map.has(cat)) {
+        map.set(cat, []);
+      }
+      map.get(cat)!.push(p);
+    }
+    return map;
+  }, [products, normalizeCategory]);
+
+  // Best Sellers: Exactly 1 representative product from each category (Sonu, Cello, Aquarium, etc.)
   const bestSellers = useMemo(() => {
     if (!products || products.length === 0) return [];
-    return [...products]
-      .sort((a, b) => (b.rating || 0) - (a.rating || 0))
-      .slice(0, 10);
-  }, [products]);
+
+    const orderedCats: string[] = [];
+    // Prioritize ORDERED_CATEGORY_NAMES first
+    for (const name of ORDERED_CATEGORY_NAMES) {
+      if (productsByCategory.has(name)) {
+        orderedCats.push(name);
+      }
+    }
+    // Add any remaining categories
+    for (const cat of productsByCategory.keys()) {
+      if (!orderedCats.includes(cat)) {
+        orderedCats.push(cat);
+      }
+    }
+
+    const items: Product[] = [];
+    for (const cat of orderedCats) {
+      const catProds = productsByCategory.get(cat) || [];
+      if (catProds.length > 0) {
+        // Pick top product in this category
+        const topProduct = [...catProds].sort((a, b) => (b.rating || 0) - (a.rating || 0))[0];
+        if (topProduct) {
+          items.push(topProduct);
+        }
+      }
+    }
+    return items;
+  }, [products, productsByCategory]);
+
+  // Category Carousels: Sonu first, Cello second, then every other category with up to 5 products + See all
+  const categorySections = useMemo(() => {
+    if (!products || products.length === 0) return [];
+
+    const orderedCats: string[] = [];
+    for (const name of ORDERED_CATEGORY_NAMES) {
+      if (productsByCategory.has(name)) {
+        orderedCats.push(name);
+      }
+    }
+    for (const cat of productsByCategory.keys()) {
+      if (!orderedCats.includes(cat)) {
+        orderedCats.push(cat);
+      }
+    }
+
+    return orderedCats.map(cat => {
+      const allCatProds = productsByCategory.get(cat) || [];
+      return {
+        category: cat,
+        products: allCatProds.slice(0, 5),
+        totalCount: allCatProds.length,
+      };
+    }).filter(sec => sec.products.length > 0);
+  }, [products, productsByCategory]);
 
   // Recommended For You (Grid)
   const recommendedProducts = useMemo(() => {
@@ -171,11 +265,52 @@ export default function HomeView() {
             />
           }
         >
-          {/* 3. HERO PROMOTIONAL BANNER */}
+          {/* 3. HERO PROMOTIONAL BANNER (Uses local assets/banners PNG images directly) */}
           <HeroBanner
-            banners={banners}
             onShopNow={handleCategoryClick}
           />
+
+          {/* 3b. ACTIVE CATEGORY DISCOUNT PROMOTIONS (Controlled Two-Price Architecture) */}
+          {activeDiscounts && activeDiscounts.length > 0 && (
+            <View style={styles.promotionsSection}>
+              <View style={styles.promoHeader}>
+                <Ionicons name="sparkles" size={15} color={colors.accentGreen} />
+                <Text style={styles.promoHeaderTitle}>Active Promotional Offers</Text>
+                <View style={styles.promoLiveBadge}>
+                  <View style={styles.promoLiveDot} />
+                  <Text style={styles.promoLiveText}>LIVE</Text>
+                </View>
+              </View>
+
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.promoCardsScroll}
+              >
+                {activeDiscounts.map((disc) => (
+                  <TouchableOpacity
+                    key={disc.id || disc._id || disc.category}
+                    activeOpacity={0.85}
+                    style={styles.promoCard}
+                    onPress={() => handleCategoryClick(disc.category)}
+                  >
+                    <View style={styles.promoDiscountBadge}>
+                      <Text style={styles.promoDiscountText}>{disc.discountPercentage}% OFF</Text>
+                    </View>
+                    <View style={styles.promoInfoCol}>
+                      <Text style={styles.promoCategoryName} numberOfLines={1}>
+                        {mapCategoryLabel(disc.category)}
+                      </Text>
+                      <Text style={styles.promoSubText}>
+                        Flat discount on Strike Price
+                      </Text>
+                    </View>
+                    <Feather name="chevron-right" size={15} color={colors.accentGreen} />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
 
           {/* 4. SHOP CATEGORIES CAROUSEL */}
           <SectionHeader
@@ -220,29 +355,34 @@ export default function HomeView() {
             </View>
           )}
 
-          {/* 7. FEATURED COLLECTIONS */}
-          {categories.length > 0 && (
-            <View style={styles.sectionBlock}>
+          {/* 6. CATEGORY-WISE PRODUCT SECTIONS (Sonu 5 items, Cello 5 items, etc. with See all) */}
+          {categorySections.map((sec) => (
+            <View key={sec.category} style={styles.sectionBlock}>
               <SectionHeader
-                title="Featured Collections"
-                subtitle="Designed for elegance & luxury"
+                title={sec.category}
+                subtitle={`Top ${sec.products.length} ${sec.category.toLowerCase()} picks`}
+                actionText="See all"
+                onActionPress={() => {
+                  setSelectedCategory(sec.category);
+                  setActiveTab('explore');
+                }}
               />
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.featuredCollectionsScroll}
+                contentContainerStyle={styles.horizontalProductRow}
               >
-                {categories.slice(0, 5).map((cat) => (
-                  <FeaturedCollectionCard
-                    key={cat.name}
-                    category={cat}
-                    onPress={handleCategoryClick}
-                    width={290}
+                {sec.products.map((p) => (
+                  <ProductCard
+                    key={p.id}
+                    product={p}
+                    cardWidth={165}
                   />
                 ))}
               </ScrollView>
             </View>
-          )}
+          ))}
+
 
           {/* 8. JUST FOR YOU / RECOMMENDED GRID */}
           {recommendedProducts.length > 0 && (
@@ -370,10 +510,131 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 4,
   },
+  seeAllCard: {
+    width: 130,
+    height: 230,
+    backgroundColor: colors.surfaceSecondary,
+    borderRadius: radius.card,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+  },
+  seeAllCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  seeAllCardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  seeAllCardSubtitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
   featuredCollectionsScroll: {
     paddingHorizontal: spacing.pageHorizontal,
     gap: 14,
     paddingBottom: 4,
+  },
+  promotionsSection: {
+    marginVertical: spacing.sm,
+  },
+  promoHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.pageHorizontal,
+    marginBottom: 8,
+    gap: 6,
+  },
+  promoHeaderTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+    letterSpacing: 0.2,
+  },
+  promoLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(0, 135, 90, 0.12)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    marginLeft: 'auto',
+  },
+  promoLiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accentGreen,
+  },
+  promoLiveText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: colors.accentGreen,
+    letterSpacing: 0.5,
+  },
+  promoCardsScroll: {
+    paddingHorizontal: spacing.pageHorizontal,
+    gap: 10,
+    paddingVertical: 2,
+  },
+  promoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 135, 90, 0.25)',
+    borderRadius: radius.card,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 10,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  promoDiscountBadge: {
+    backgroundColor: colors.accentGreen,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+  },
+  promoDiscountText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  promoInfoCol: {
+    justifyContent: 'center',
+  },
+  promoCategoryName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  promoSubText: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   productGrid: {
     flexDirection: 'row',

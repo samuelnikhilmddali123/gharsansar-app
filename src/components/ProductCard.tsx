@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, View, Text, TouchableOpacity } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import { colors, radius, typography, shadows } from '../theme/tokens';
 import { PremiumImage } from './PremiumImage';
 import { Product, useMobileApp } from '../context/MobileAppContext';
@@ -18,13 +19,33 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
   onPress,
   style,
 }) => {
-  const { favorites, toggleFavorite, addToCart, setSelectedProductId } = useMobileApp();
+  const {
+    favorites,
+    toggleFavorite,
+    cart,
+    addToCart,
+    updateCartQuantity,
+    setSelectedProductId,
+    isAuthenticated,
+    user,
+    setActiveTab,
+  } = useMobileApp();
   const isFav = favorites.includes(product.id);
 
-  // Calculate discount percent
-  const discountPercent = product.actPrice && product.actPrice > product.price
-    ? Math.round(((product.actPrice - product.price) / product.actPrice) * 100)
-    : 0;
+  // Get current quantity of this product in cart
+  const cartItem = cart.find(
+    (item) => item.product?.id === product.id || (item as any).id === product.id
+  );
+  const quantity = cartItem ? cartItem.quantity : 0;
+
+  // Get strike price (original crossed-out MRP) and actual selling price (customer purchase price)
+  const strike = product.strikePrice || product.actPrice || 0;
+  const currentPrice = product.actualPrice || product.price || 0;
+  const hasSavings = strike > currentPrice;
+  const hasCategoryPromo = Boolean(product.hasCategoryDiscount && product.categoryDiscountPercentage > 0);
+  const discountPercent = hasCategoryPromo
+    ? product.categoryDiscountPercentage
+    : (product.discountPercentage || (hasSavings ? Math.round(((strike - currentPrice) / strike) * 100) : 0));
 
   const handleCardPress = () => {
     if (onPress) {
@@ -35,11 +56,49 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
   };
 
   const handleToggleWishlist = () => {
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
     toggleFavorite(product.id);
   };
 
-  const handleAddCart = () => {
+  const handleAddCart = (e?: any) => {
+    e?.stopPropagation?.();
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
     addToCart(product);
+  };
+
+  const handleIncrement = (e?: any) => {
+    e?.stopPropagation?.();
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    updateCartQuantity(product.id, 1);
+  };
+
+  const handleDecrement = (e?: any) => {
+    e?.stopPropagation?.();
+    if (!isAuthenticated || !user) {
+      setSelectedProductId(null);
+      setActiveTab('account');
+      return;
+    }
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    } catch {}
+    updateCartQuantity(product.id, -1);
   };
 
   return (
@@ -59,10 +118,12 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
             product={product}
           />
 
-          {/* Discount Badge */}
-          {discountPercent > 0 && (
-            <View style={styles.discountBadge}>
-              <Text style={styles.discountText}>-{discountPercent}%</Text>
+          {/* Discount Badge (Promotional category discount or strike/actual price difference) */}
+          {(discountPercent > 0 || hasCategoryPromo) && (
+            <View style={[styles.discountBadge, hasCategoryPromo && styles.categoryDiscountBadge]}>
+              <Text style={styles.discountText}>
+                {hasCategoryPromo ? `${product.categoryDiscountPercentage}% OFF` : `-${discountPercent}%`}
+              </Text>
             </View>
           )}
 
@@ -95,24 +156,51 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
             <Text style={styles.reviewsCount}>({product.reviewsCount || 12})</Text>
           </View>
 
-          {/* Price & Add to Cart Row */}
+          {/* Price & Stepper Row - Image 4 Format */}
           <View style={styles.priceRow}>
+            {/* Price Column: Strikethrough Strike Price (MRP) on top, Large Actual Price below */}
             <View style={styles.priceColumn}>
-              <Text style={styles.currentPrice}>₹{product.price.toLocaleString()}</Text>
-              {product.actPrice && product.actPrice > product.price ? (
-                <Text style={styles.mrpPrice}>₹{product.actPrice.toLocaleString()}</Text>
-              ) : null}
+              {hasSavings ? (
+                <Text style={styles.mrpPrice}>₹{strike.toLocaleString()}</Text>
+              ) : (
+                <View style={styles.mrpPlaceholder} />
+              )}
+              <Text style={styles.currentPrice}>₹{currentPrice.toLocaleString()}</Text>
             </View>
 
-            <TouchableOpacity
-              activeOpacity={0.7}
-              delayPressIn={0}
-              onPress={handleAddCart}
-              style={styles.cartButton}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Feather name="shopping-bag" size={17} color={colors.textInverse} />
-            </TouchableOpacity>
+            {/* Stepper / ADD Pill Button (Image 4 Design) */}
+            {quantity > 0 ? (
+              <View style={styles.stepperContainer}>
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={handleDecrement}
+                  style={styles.stepperBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                >
+                  <Feather name="minus" size={13} color={colors.accentGreen} />
+                </TouchableOpacity>
+
+                <Text style={styles.stepperValue}>{quantity}</Text>
+
+                <TouchableOpacity
+                  activeOpacity={0.7}
+                  onPress={handleIncrement}
+                  style={styles.stepperBtn}
+                  hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+                >
+                  <Feather name="plus" size={13} color={colors.accentGreen} />
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={handleAddCart}
+                style={styles.addBtn}
+                hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              >
+                <Text style={styles.addBtnText}>ADD</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       </TouchableOpacity>
@@ -155,6 +243,9 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: radius.pill,
     zIndex: 2,
+  },
+  categoryDiscountBadge: {
+    backgroundColor: colors.accentGreen,
   },
   discountText: {
     color: colors.textInverse,
@@ -199,7 +290,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   ratingScore: {
     fontSize: 11,
@@ -214,31 +305,75 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
+    marginTop: 2,
   },
   priceColumn: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 4,
-  },
-  currentPrice: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.textPrimary,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-end',
+    flex: 1,
+    marginRight: 6,
   },
   mrpPrice: {
     fontSize: 11,
+    fontWeight: '400',
     color: colors.textMuted,
     textDecorationLine: 'line-through',
+    marginBottom: 2,
   },
-  cartButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.brandCharcoal,
+  mrpPlaceholder: {
+    height: 15,
+  },
+  currentPrice: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    letterSpacing: -0.4,
+    lineHeight: 22,
+  },
+  stepperContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: '#DFE2E5',
+    height: 32,
+    minWidth: 72,
+    paddingHorizontal: 2,
+    ...shadows.subtle,
+  },
+  stepperBtn: {
+    width: 24,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    marginLeft: 6,
+  },
+  stepperValue: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    minWidth: 18,
+    textAlign: 'center',
+  },
+  addBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: radius.sm,
+    borderWidth: 1.2,
+    borderColor: 'rgba(0, 135, 90, 0.4)',
+    height: 32,
+    minWidth: 72,
+    paddingHorizontal: 12,
     ...shadows.subtle,
+  },
+  addBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.accentGreen,
+    letterSpacing: 0.6,
   },
 });
 

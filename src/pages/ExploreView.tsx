@@ -27,10 +27,16 @@ export default function ExploreView() {
     selectedCategory,
     setSelectedCategory,
     setSelectedProductId,
+    getCategoryDiscount,
   } = useMobileApp();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const scrollRef = React.useRef<ScrollView>(null);
+  const scrollRef = React.useRef<any>(null);
+
+  const activeCatDiscount = useMemo(() => {
+    if (selectedCategory === 'All') return undefined;
+    return getCategoryDiscount ? getCategoryDiscount(selectedCategory) : undefined;
+  }, [selectedCategory, getCategoryDiscount]);
 
   // Built-in categories list with 'All'
   const filterCategories = useMemo(() => {
@@ -217,6 +223,23 @@ export default function ExploreView() {
               </View>
             )}
           </>
+        )}
+
+        {/* ACTIVE CATEGORY DISCOUNT PROMOTIONAL BANNER */}
+        {activeCatDiscount && (
+          <View style={styles.catDiscountBanner}>
+            <View style={styles.catDiscountBadge}>
+              <Text style={styles.catDiscountBadgeText}>{activeCatDiscount.discountPercentage}% OFF</Text>
+            </View>
+            <View style={styles.catDiscountTextCol}>
+              <Text style={styles.catDiscountTitle}>
+                Category Promotion Active
+              </Text>
+              <Text style={styles.catDiscountSubtitle}>
+                Flat {activeCatDiscount.discountPercentage}% off strike price on all {selectedCategory} products!
+              </Text>
+            </View>
+          </View>
         )}
 
         {/* PRODUCTS SECTION / RESULTS */}
@@ -410,6 +433,48 @@ const styles = StyleSheet.create({
     gap: 14,
   },
   // 2-Column Products Grid
+  catDiscountBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: spacing.pageHorizontal,
+    marginTop: 8,
+    marginBottom: 12,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 135, 90, 0.25)',
+    borderRadius: radius.card,
+    gap: 12,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  catDiscountBadge: {
+    backgroundColor: colors.accentGreen,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+  },
+  catDiscountBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  catDiscountTextCol: {
+    flex: 1,
+  },
+  catDiscountTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  catDiscountSubtitle: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
   productsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',

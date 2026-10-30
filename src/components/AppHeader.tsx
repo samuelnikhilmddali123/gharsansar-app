@@ -1,6 +1,7 @@
 import React from 'react';
 import { StyleSheet, View, Text, TouchableOpacity, Image } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { colors, typography, spacing, radius } from '../theme/tokens';
 import { useMobileApp } from '../context/MobileAppContext';
 
@@ -8,15 +9,27 @@ interface AppHeaderProps {
   onWishlistPress?: () => void;
   onNotificationsPress?: () => void;
   onAccountPress?: () => void;
+  onCartPress?: () => void;
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
   onWishlistPress,
   onNotificationsPress,
   onAccountPress,
+  onCartPress,
 }) => {
-  const { favorites, notifications, setActiveTab, setSelectedProductId } = useMobileApp();
+  const { cart, favorites, notifications, setActiveTab, setSelectedProductId } = useMobileApp();
   const unreadNotifs = notifications.filter(n => !n.read).length;
+  const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+
+  const handleCart = () => {
+    setSelectedProductId(null);
+    if (onCartPress) {
+      onCartPress();
+    } else {
+      setActiveTab('cart');
+    }
+  };
 
   const handleWishlist = () => {
     setSelectedProductId(null);
@@ -38,21 +51,66 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
 
   return (
     <View style={styles.headerContainer}>
-      {/* Brand Identity: Logo + Typography */}
-      <View style={styles.brandRow}>
+      {/* Brand Identity: Authentic Ghar Sansar Logo (matches startup screen) */}
+      <TouchableOpacity
+        onPress={() => {
+          setSelectedProductId(null);
+          setActiveTab('home');
+        }}
+        activeOpacity={0.8}
+        style={styles.brandContainer}
+      >
         <Image
           source={require('../../assets/logo.png')}
-          style={styles.logo}
+          style={styles.brandLogo}
           resizeMode="contain"
         />
-        <View style={styles.brandTextGroup}>
-          <Text style={styles.brandTitle}>GHAR SANSAR</Text>
-          <Text style={styles.brandSubtitle}>Luxury Home & Kitchen Store</Text>
-        </View>
-      </View>
+        <Text style={styles.brandSubtitle}>Luxury Home & Kitchen Store</Text>
+      </TouchableOpacity>
 
-      {/* Action Buttons: Clean 38-40px touch targets */}
+      {/* Action Buttons: Cart (Left beside Wishlist), Wishlist, Account */}
       <View style={styles.actionsRow}>
+        {/* Cart Button: Black symbol outline & wheels with original orange count number */}
+        <TouchableOpacity
+          onPress={handleCart}
+          style={styles.iconButton}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <View style={styles.cartIconWrapper}>
+            <Svg width={25} height={22} viewBox="0 0 32 28">
+              {/* Cart body: Black stroke */}
+              <Path
+                d="M 2 5.5 L 7.5 5.5 L 11.5 17.5 L 22.5 17.5 L 26.5 8"
+                fill="none"
+                stroke={colors.textPrimary}
+                strokeWidth={2.6}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              {/* Solid black wheels */}
+              <Circle cx={13.5} cy={22.5} r={2.2} fill={colors.textPrimary} />
+              <Circle cx={20.5} cy={22.5} r={2.2} fill={colors.textPrimary} />
+            </Svg>
+
+            {/* Orange quantity number in the cart basket */}
+            {cartCount > 0 && (
+              <View style={styles.cartCountContainer} pointerEvents="none">
+                <Text
+                  style={[
+                    styles.cartCountNumber,
+                    cartCount > 9 && { fontSize: 8.5, letterSpacing: -0.5 },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {cartCount > 99 ? '99+' : cartCount}
+                </Text>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Wishlist Button */}
         <TouchableOpacity
           onPress={handleWishlist}
           style={styles.iconButton}
@@ -65,7 +123,7 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
           )}
         </TouchableOpacity>
 
-
+        {/* Account Button */}
         <TouchableOpacity
           onPress={handleAccount}
           style={styles.iconButton}
@@ -91,31 +149,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.surfaceTertiary,
   },
-  brandRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  logo: {
-    width: 38,
-    height: 38,
-    borderRadius: 8,
-  },
-  brandTextGroup: {
+  brandContainer: {
     justifyContent: 'center',
+    alignItems: 'flex-start',
   },
-  brandTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: colors.textPrimary,
-    letterSpacing: 0.8,
+  brandLogo: {
+    width: 88,
+    height: 34,
   },
   brandSubtitle: {
-    fontSize: 10,
-    fontWeight: '600',
+    fontSize: 9,
+    fontWeight: '700',
     color: colors.brandForestGreen,
     letterSpacing: 0.3,
-    marginTop: 1,
+    marginTop: 2,
   },
   actionsRow: {
     flexDirection: 'row',
@@ -131,6 +178,29 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSecondary,
     position: 'relative',
   },
+  cartIconWrapper: {
+    position: 'relative',
+    width: 25,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountContainer: {
+    position: 'absolute',
+    left: 6,
+    width: 14,
+    top: -2,
+    height: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountNumber: {
+    fontSize: 10.5,
+    fontWeight: '900',
+    color: '#F08804',
+    textAlign: 'center',
+    lineHeight: 12,
+  },
   miniDotBadge: {
     position: 'absolute',
     top: 9,
@@ -140,59 +210,5 @@ const styles = StyleSheet.create({
     borderRadius: 3.5,
     backgroundColor: colors.accentRed,
   },
-  badgeContainer: {
-    position: 'absolute',
-    top: 5,
-    right: 4,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: colors.accentRed,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 3,
-  },
-  badgeText: {
-    color: colors.textInverse,
-    fontSize: 9,
-    fontWeight: '800',
-  },
-  cartButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
-    borderRadius: 19,
-    backgroundColor: colors.surfaceSecondary,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
-    height: 38,
-    gap: 3,
-  },
-  cartIconWrapper: {
-    position: 'relative',
-    width: 25,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartCountContainer: {
-    position: 'absolute',
-    top: -4,
-    left: 7,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cartCountNumber: {
-    fontSize: 10.5,
-    fontWeight: '900',
-    color: '#E67A00',
-  },
-  cartWord: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.textPrimary,
-    letterSpacing: -0.2,
-  },
 });
+

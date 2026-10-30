@@ -10,11 +10,13 @@ import {
   Image,
   Alert,
   NativeSyntheticEvent,
-  TextInputKeyPressEventData,
+  ScrollView,
+  KeyboardAvoidingView,
+  Keyboard,
+  KeyboardEvent,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useMobileApp } from '../context/MobileAppContext';
-import { KeyboardSafeScrollView } from './KeyboardSafeScrollView';
 
 interface GharSansarAuthProps {
   onSuccess?: () => void;
@@ -65,7 +67,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   const [focusedOtpIndex, setFocusedOtpIndex] = useState<number | null>(null);
   const [resendCountdown, setResendCountdown] = useState<number>(0);
   const [otpFeedbackNotice, setOtpFeedbackNotice] = useState<string>('Verification code sent to your email address.');
-  const otpInputRefs = useRef<(TextInput | null)[]>([]);
+  const otpInputRefs = useRef<any[]>([]);
 
   // Register State
   const [fullName, setFullName] = useState('');
@@ -81,6 +83,80 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   const criteriaUpper = /[A-Z]/.test(regPassword);
   const criteriaLower = /[a-z]/.test(regPassword);
   const criteriaNumber = /[0-9]/.test(regPassword);
+
+  // Keyboard and Auto-Scroll Engine for Android & iOS
+  const scrollViewRef = useRef<any>(null);
+  const fieldLayouts = useRef<{ [key: string]: { y: number; height: number } }>({});
+  const activeFieldRef = useRef<string | null>(null);
+  const [keyboardHeight, setKeyboardHeight] = useState<number>(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState<boolean>(false);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+
+    const showSub = Keyboard.addListener(showEvent, (e: KeyboardEvent) => {
+      const kHeight = e.endCoordinates?.height || 280;
+      setKeyboardHeight(kHeight);
+      setIsKeyboardVisible(true);
+
+      // Auto-scroll to focused field once keyboard height is captured
+      if (activeFieldRef.current) {
+        const fieldName = activeFieldRef.current;
+        setTimeout(() => {
+          scrollToField(fieldName);
+        }, 50);
+        setTimeout(() => {
+          scrollToField(fieldName);
+        }, 220);
+      }
+    });
+
+    const hideSub = Keyboard.addListener(hideEvent, () => {
+      setIsKeyboardVisible(false);
+      setKeyboardHeight(0);
+      activeFieldRef.current = null;
+      if (scrollViewRef.current) {
+        scrollViewRef.current.scrollTo({ y: 0, animated: true });
+      }
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+
+  const scrollToField = (fieldName: string) => {
+    activeFieldRef.current = fieldName;
+    const layout = fieldLayouts.current[fieldName];
+    if (!layout || !scrollViewRef.current) return;
+
+    // Smart vertical scroll calculation
+    let targetY = Math.max(0, layout.y - 25);
+
+    if (fieldName === 'confirmPassword') {
+      // Keep Confirm Password, its label, and the CREATE ACCOUNT button clearly visible
+      targetY = Math.max(0, layout.y - 15);
+    } else if (fieldName === 'regPassword') {
+      // Keep Password, its label, and all 4 criteria bullets in view
+      targetY = Math.max(0, layout.y - 20);
+    } else if (fieldName === 'phone' || fieldName === 'regEmail') {
+      targetY = Math.max(0, layout.y - 25);
+    } else if (fieldName === 'fullName') {
+      targetY = Math.max(0, layout.y - 30);
+    }
+
+    scrollViewRef.current.scrollTo({
+      y: targetY,
+      animated: true,
+    });
+  };
+
+  const handleFocusField = (fieldName: string) => {
+    activeFieldRef.current = fieldName;
+    scrollToField(fieldName);
+  };
 
   // Resend Countdown Timer
   useEffect(() => {
@@ -101,8 +177,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   };
 
   const handleSwitchMode = (newMode: 'signin' | 'register') => {
+    Keyboard.dismiss();
     resetErrors();
     setMode(newMode);
+    if (scrollViewRef.current) {
+      scrollViewRef.current.scrollTo({ y: 0, animated: false });
+    }
   };
 
   // 1. Password Login Submit
@@ -236,7 +316,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
 
   // OTP Backspace Handler
   const handleOtpKeyPress = (
-    e: NativeSyntheticEvent<TextInputKeyPressEventData>,
+    e: any,
     index: number
   ) => {
     if (e.nativeEvent.key === 'Backspace') {
@@ -315,11 +395,23 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   };
 
   return (
-    <KeyboardSafeScrollView
-      showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.container}
-      extraScrollHeight={140}
+    <KeyboardAvoidingView
+      style={styles.keyboardAvoidWrapper}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scrollView}
+        contentContainerStyle={[
+          styles.container,
+          {
+            paddingBottom: isKeyboardVisible ? keyboardHeight + 140 : 40,
+          },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+      >
       {/* Optional Close Button for Modal */}
       {showCloseButton && onClose && (
         <TouchableOpacity
@@ -420,7 +512,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
       {mode === 'signin' && authMethod === 'password' && (
         <View style={styles.formSection}>
           {/* Email or Phone */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['loginEmail'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Email or Phone</Text>
             <View style={styles.inputWrapper}>
               <Feather name="mail" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -432,12 +529,18 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 onChangeText={setLoginEmailOrPhone}
                 autoCapitalize="none"
                 keyboardType="email-address"
+                onFocus={() => handleFocusField('loginEmail')}
               />
             </View>
           </View>
 
           {/* Password */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['loginPassword'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Password</Text>
             <View style={styles.inputWrapper}>
               <Feather name="lock" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -449,6 +552,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 value={loginPassword}
                 onChangeText={setLoginPassword}
                 autoCapitalize="none"
+                onFocus={() => handleFocusField('loginPassword')}
               />
               <TouchableOpacity
                 onPress={() => setShowLoginPassword(!showLoginPassword)}
@@ -514,7 +618,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
       {mode === 'signin' && authMethod === 'otp' && otpStep === 'email' && (
         <View style={styles.formSection}>
           {/* Email Address */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['otpEmail'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Email Address</Text>
             <View style={styles.inputWrapper}>
               <Feather name="mail" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -527,6 +636,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 autoCapitalize="none"
                 keyboardType="email-address"
                 autoComplete="email"
+                onFocus={() => handleFocusField('otpEmail')}
               />
             </View>
             <Text style={styles.helperText}>
@@ -598,7 +708,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
           </View>
 
           {/* 6 Individual Square Digit Boxes */}
-          <View style={styles.otpBoxesRow}>
+          <View
+            style={styles.otpBoxesRow}
+            onLayout={(e) => {
+              fieldLayouts.current['otpDigits'] = e.nativeEvent.layout;
+            }}
+          >
             {otpDigits.map((digit, idx) => {
               const isFocused = focusedOtpIndex === idx;
               return (
@@ -620,7 +735,10 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                     value={digit}
                     onChangeText={(txt) => handleOtpDigitChange(txt, idx)}
                     onKeyPress={(e) => handleOtpKeyPress(e, idx)}
-                    onFocus={() => setFocusedOtpIndex(idx)}
+                    onFocus={() => {
+                      setFocusedOtpIndex(idx);
+                      handleFocusField('otpDigits');
+                    }}
                     onBlur={() => setFocusedOtpIndex(null)}
                     selectTextOnFocus
                     caretHidden={false}
@@ -703,7 +821,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
       {mode === 'register' && (
         <View style={styles.formSection}>
           {/* Full Name */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['fullName'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Full Name</Text>
             <View style={styles.inputWrapper}>
               <Feather name="user" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -714,12 +837,18 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 value={fullName}
                 onChangeText={setFullName}
                 autoCapitalize="words"
+                onFocus={() => handleFocusField('fullName')}
               />
             </View>
           </View>
 
           {/* Email Address */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['regEmail'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Email Address</Text>
             <View style={styles.inputWrapper}>
               <Feather name="mail" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -731,12 +860,18 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 onChangeText={setRegEmail}
                 autoCapitalize="none"
                 keyboardType="email-address"
+                onFocus={() => handleFocusField('regEmail')}
               />
             </View>
           </View>
 
           {/* Phone Number */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['phone'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Phone Number</Text>
             <View style={styles.inputWrapper}>
               <Feather name="smartphone" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -748,12 +883,18 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 onChangeText={setPhone}
                 keyboardType="phone-pad"
                 maxLength={10}
+                onFocus={() => handleFocusField('phone')}
               />
             </View>
           </View>
 
           {/* Password */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['regPassword'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Password</Text>
             <View style={styles.inputWrapper}>
               <Feather name="lock" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -765,6 +906,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 value={regPassword}
                 onChangeText={setRegPassword}
                 autoCapitalize="none"
+                onFocus={() => handleFocusField('regPassword')}
               />
               <TouchableOpacity
                 onPress={() => setShowRegPassword(!showRegPassword)}
@@ -828,7 +970,12 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
           </View>
 
           {/* Confirm Password */}
-          <View style={styles.inputGroup}>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => {
+              fieldLayouts.current['confirmPassword'] = e.nativeEvent.layout;
+            }}
+          >
             <Text style={styles.label}>Confirm Password</Text>
             <View style={styles.inputWrapper}>
               <Feather name="lock" size={18} color="#94A3B8" style={styles.inputIcon} />
@@ -840,6 +987,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 autoCapitalize="none"
+                onFocus={() => handleFocusField('confirmPassword')}
               />
               <TouchableOpacity
                 onPress={() => setShowConfirmPassword(!showConfirmPassword)}
@@ -855,42 +1003,61 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
             </View>
           </View>
 
-          {/* CREATE ACCOUNT Button */}
-          <TouchableOpacity
-            style={styles.primaryButtonForestGreen}
-            activeOpacity={0.85}
-            onPress={handleRegister}
-            disabled={loading}
+          {/* Action Button & Sign In Link Footer */}
+          <View
+            onLayout={(e) => {
+              fieldLayouts.current['registerFooter'] = e.nativeEvent.layout;
+            }}
           >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>CREATE ACCOUNT</Text>
-            )}
-          </TouchableOpacity>
+            {/* CREATE ACCOUNT Button */}
+            <TouchableOpacity
+              style={styles.primaryButtonForestGreen}
+              activeOpacity={0.85}
+              onPress={handleRegister}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" size="small" />
+              ) : (
+                <Text style={styles.primaryButtonText}>CREATE ACCOUNT</Text>
+              )}
+            </TouchableOpacity>
 
-          {/* Switch to Sign In */}
-          <TouchableOpacity
-            onPress={() => handleSwitchMode('signin')}
-            activeOpacity={0.7}
-            style={styles.switchRow}
-          >
-            <Text style={styles.switchLinkRed}>
-              ALREADY HAVE AN ACCOUNT? SIGN IN
-            </Text>
-          </TouchableOpacity>
+            {/* Switch to Sign In */}
+            <TouchableOpacity
+              onPress={() => handleSwitchMode('signin')}
+              activeOpacity={0.7}
+              style={styles.switchRow}
+            >
+              <Text style={styles.switchLinkRed}>
+                ALREADY HAVE AN ACCOUNT? SIGN IN
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
-    </KeyboardSafeScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 };
 
 const styles = StyleSheet.create({
+  keyboardAvoidWrapper: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+  },
+  scrollView: {
+    flex: 1,
+    width: '100%',
+    backgroundColor: '#FFFFFF',
+  },
   container: {
     paddingHorizontal: 24,
     paddingTop: 16,
     paddingBottom: 40,
     backgroundColor: '#FFFFFF',
+    flexGrow: 1,
   },
   closeBtn: {
     alignSelf: 'flex-end',
