@@ -3,6 +3,7 @@ import Constants from 'expo-constants';
 import * as Device from 'expo-device';
 
 export const LIVE_BACKEND_URL = 'https://backend.gharsansar.website';
+export const LIVE_WEB_URL = 'https://gharsansar.website';
 
 const resolveBackendUrl = (): string => {
   const envUrl = (process.env.EXPO_PUBLIC_BACKEND_URL || LIVE_BACKEND_URL).trim().replace(/\/+$/, '');
@@ -19,21 +20,36 @@ const resolveBackendUrl = (): string => {
 export const BACKEND_URL = resolveBackendUrl();
 console.log('[GharSansar API] Configured BACKEND_URL:', BACKEND_URL);
 
-export const normalizeImageUrl = (url: string): string => {
+export const normalizeImageUrl = (url: string, preferWebCdn = false): string => {
   if (!url) return '';
-  let cleaned = url;
+  let cleaned = url.trim();
+
+  // For return gifts static assets, https://gharsansar.website serves via Cloudflare CDN edge
+  const isReturnGiftAsset = cleaned.toLowerCase().includes('return gifts') || cleaned.toLowerCase().includes('return_gifts');
+  const baseDomain = (preferWebCdn || isReturnGiftAsset) ? LIVE_WEB_URL : BACKEND_URL;
+
   if (cleaned.startsWith('/')) {
-    cleaned = `${BACKEND_URL}${cleaned}`;
+    cleaned = `${baseDomain}${cleaned}`;
+  } else if (!cleaned.startsWith('http://') && !cleaned.startsWith('https://')) {
+    cleaned = `${baseDomain}/${cleaned.replace(/^\/+/, '')}`;
   } else {
-    cleaned = cleaned
-      .replace(/^https?:\/\/(backend\.)?gharsansar\.website/, BACKEND_URL)
-      .replace(/^http:\/\/(192\.168\.\d+\.\d+|localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+):\d+/, BACKEND_URL);
+    if (isReturnGiftAsset) {
+      cleaned = cleaned.replace(/^https?:\/\/backend\.gharsansar\.website/i, LIVE_WEB_URL);
+    } else {
+      cleaned = cleaned
+        .replace(/^https?:\/\/(backend\.)?gharsansar\.website/i, BACKEND_URL)
+        .replace(/^http:\/\/(192\.168\.\d+\.\d+|localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+):\d+/, BACKEND_URL);
+    }
   }
 
   let decoded = cleaned;
   try {
-    decoded = decodeURIComponent(cleaned);
-  } catch {}
+    decoded = decodeURI(cleaned);
+  } catch {
+    try {
+      decoded = decodeURIComponent(cleaned);
+    } catch {}
+  }
 
   decoded = decoded.replace(/aquarium\s+and\s+accesories/gi, 'aquarium and accesories');
   return encodeURI(decoded);

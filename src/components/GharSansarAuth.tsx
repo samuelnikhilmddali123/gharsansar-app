@@ -40,7 +40,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
   showCloseButton = false,
   onClose,
 }) => {
-  const { login, register, requestOtp, verifyOtp, loginWithGoogle } = useMobileApp();
+  const { login, register, requestOtp, verifyOtp, loginWithGoogle, isAuthenticated, user } = useMobileApp();
 
   // Screen Mode: 'signin' | 'register'
   const [mode, setMode] = useState<'signin' | 'register'>(initialMode);
@@ -490,18 +490,31 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
     }
   };
 
+  // Instantly clear any banners/errors as soon as authentication is confirmed
+  useEffect(() => {
+    if (isAuthenticated || user) {
+      setErrorMessage('');
+      resetErrors();
+    }
+  }, [isAuthenticated, user]);
+
   const handleGoogleSignIn = async () => {
     resetErrors();
     setGoogleLoading(true);
     try {
       const result = await loginWithGoogle();
-      if (result.success) {
+      if (result.success || isAuthenticated || user) {
+        setErrorMessage('');
         if (onSuccess) onSuccess();
       } else if (result.error && result.error !== 'Authentication cancelled') {
-        setErrorMessage('Unable to sign you in. Please try again.');
+        if (!isAuthenticated && !user) {
+          setErrorMessage('Unable to sign you in. Please try again.');
+        }
       }
     } catch (err) {
-      setErrorMessage('Unable to sign you in. Please try again.');
+      if (!isAuthenticated && !user) {
+        setErrorMessage('Unable to sign you in. Please try again.');
+      }
     } finally {
       setGoogleLoading(false);
     }
@@ -624,7 +637,7 @@ export const GharSansarAuth: React.FC<GharSansarAuthProps> = ({
       )}
 
       {/* Error / Success Alerts */}
-      {errorMessage ? (
+      {errorMessage && !isAuthenticated && !user ? (
         <View style={styles.alertError}>
           <Feather name="alert-circle" size={16} color="#DC2626" style={{ marginRight: 8 }} />
           <Text style={styles.alertErrorText}>{errorMessage}</Text>

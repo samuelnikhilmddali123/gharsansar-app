@@ -4,7 +4,7 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { colors, radius, typography, shadows } from '../theme/tokens';
 import { PremiumImage } from './PremiumImage';
-import { Product, useMobileApp } from '../context/MobileAppContext';
+import { Product, useMobileApp, formatCurrency } from '../context/MobileAppContext';
 
 interface ProductCardProps {
   product: Product;
@@ -38,14 +38,26 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
   );
   const quantity = cartItem ? cartItem.quantity : 0;
 
-  // Get strike price (original crossed-out MRP) and actual selling price (customer purchase price)
+  // 3-Price Architecture: Dominant Customer Final Price & Strikethrough Strike Price (MRP)
+  const finalPrice = product.finalPrice !== undefined ? product.finalPrice : (product.price !== undefined ? product.price : product.actualPrice);
   const strike = product.strikePrice || product.actPrice || 0;
-  const currentPrice = product.actualPrice || product.price || 0;
-  const hasSavings = strike > currentPrice;
+  const hasSavings = strike > finalPrice;
   const hasCategoryPromo = Boolean(product.hasCategoryDiscount && product.categoryDiscountPercentage > 0);
-  const discountPercent = hasCategoryPromo
-    ? product.categoryDiscountPercentage
-    : (product.discountPercentage || (hasSavings ? Math.round(((strike - currentPrice) / strike) * 100) : 0));
+
+  // Return Gift bulk rules
+  const isReturnGift = Boolean(
+    product.isReturnGift ||
+    product.category === 'Return Gifts' ||
+    product.category === 'return_gifts' ||
+    String(product.id).startsWith('rg-')
+  );
+
+  // Badge Display Rules:
+  // Rule A (Category Discount ON): Show `{categoryDiscountPercentage}% OFF`
+  // Rule B (Category Discount OFF): Show `round(((strikePrice - finalPrice) / strikePrice) * 100)% OFF` if strike > finalPrice
+  const discountBadgeText = hasCategoryPromo
+    ? `${product.categoryDiscountPercentage}% OFF`
+    : (hasSavings && strike > 0 ? `${Math.round(((strike - finalPrice) / strike) * 100)}% OFF` : null);
 
   const handleCardPress = () => {
     if (onPress) {
@@ -72,7 +84,7 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    addToCart(product);
+    addToCart(product, isReturnGift ? 50 : 1);
   };
 
   const handleIncrement = (e?: any) => {
@@ -98,7 +110,11 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    updateCartQuantity(product.id, -1);
+    if (isReturnGift && quantity <= 50) {
+      updateCartQuantity(product.id, -quantity);
+    } else {
+      updateCartQuantity(product.id, -1);
+    }
   };
 
   return (
@@ -119,13 +135,11 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
           />
 
           {/* Discount Badge (Promotional category discount or strike/actual price difference) */}
-          {(discountPercent > 0 || hasCategoryPromo) && (
+          {discountBadgeText ? (
             <View style={[styles.discountBadge, hasCategoryPromo && styles.categoryDiscountBadge]}>
-              <Text style={styles.discountText}>
-                {hasCategoryPromo ? `${product.categoryDiscountPercentage}% OFF` : `-${discountPercent}%`}
-              </Text>
+              <Text style={styles.discountText}>{discountBadgeText}</Text>
             </View>
-          )}
+          ) : null}
 
           {/* Wishlist Heart Button */}
           <TouchableOpacity
@@ -158,14 +172,19 @@ export const ProductCard: React.FC<ProductCardProps> = React.memo(({
 
           {/* Price & Stepper Row - Image 4 Format */}
           <View style={styles.priceRow}>
-            {/* Price Column: Strikethrough Strike Price (MRP) on top, Large Actual Price below */}
+            {/* Price Column: Strikethrough Strike Price (MRP) on top if strike > finalPrice, Dominant Final Price below */}
             <View style={styles.priceColumn}>
               {hasSavings ? (
-                <Text style={styles.mrpPrice}>₹{strike.toLocaleString()}</Text>
+                <Text style={styles.mrpPrice}>₹{formatCurrency(strike)}</Text>
               ) : (
                 <View style={styles.mrpPlaceholder} />
               )}
-              <Text style={styles.currentPrice}>₹{currentPrice.toLocaleString()}</Text>
+              <View style={styles.priceWithUnitRow}>
+                <Text style={styles.currentPrice}>₹{formatCurrency(finalPrice)}</Text>
+                {isReturnGift && (
+                  <Text style={styles.unitText}>/pc</Text>
+                )}
+              </View>
             </View>
 
             {/* Stepper / ADD Pill Button (Image 4 Design) */}
@@ -330,6 +349,16 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     letterSpacing: -0.4,
     lineHeight: 22,
+  },
+  priceWithUnitRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 2,
+  },
+  unitText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textMuted,
   },
   stepperContainer: {
     flexDirection: 'row',

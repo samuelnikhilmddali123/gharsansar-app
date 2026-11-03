@@ -40,16 +40,18 @@ export interface Product {
   title: string;
   name: string;
   description: string;
-  price: number; // Customer purchase price = actualPrice (manually controlled, never reduced by category discount)
-  actualPrice: number; // Current selling price
-  strikePrice: number; // Original reference price displayed crossed out (MRP)
+  price: number; // Customer purchase price = finalPrice (dominant price)
+  finalPrice: number; // Customer final price (dominant price customer actually pays)
+  discountedPrice: number; // Customer final price alias
+  actualPrice: number; // Base selling price in backend catalog (DO NOT show when hasCategoryDiscount == true)
+  strikePrice: number; // Original reference retail price (MRP, struck through when strikePrice > finalPrice)
   actPrice: number; // Backward-compatible alias for strikePrice
-  categoryDiscountPercentage: number; // Promotional discount percentage calculated from Strike Price (e.g. 10%)
-  categoryDiscountAmount: number; // Promotional discount amount: Strike Price × Category Discount %
-  currentDifference: number; // Difference: Strike Price - Actual Price
+  categoryDiscountPercentage: number; // Promotional discount percentage from category offer (e.g. 99%)
+  categoryDiscountAmount: number; // Category discount amount in currency
+  currentDifference: number; // Savings difference: strikePrice - finalPrice
   hasCategoryDiscount: boolean; // Whether active category promotional discount applies
-  isDiscounted: boolean; // Whether product has a discount
-  discountPercentage: number; // Overall discount % off Strike Price
+  isDiscounted: boolean; // Whether product has a discount (strikePrice > finalPrice || hasCategoryDiscount)
+  discountPercentage: number; // Effective discount badge % (categoryDiscountPercentage if promo active else savings %)
   image: string;
   category: string;
   subCategory: string;
@@ -57,6 +59,8 @@ export interface Product {
   reviewsCount: number;
   matchPercent: number;
   commentsCount: number;
+  isReturnGift?: boolean;
+  minOrderQuantity?: number;
 }
 
 export interface CategoryDiscount {
@@ -108,7 +112,7 @@ export interface DeliveryAddress {
   isDefault?: boolean;
 }
 
-type TabType = 'home' | 'explore' | 'cart' | 'wishlist' | 'account';
+type TabType = 'home' | 'explore' | 'cart' | 'wishlist' | 'account' | 'returnGifts';
 
 interface MobileAppContextType {
   activeTab: TabType;
@@ -116,7 +120,7 @@ interface MobileAppContextType {
   selectedProductId: string | null;
   setSelectedProductId: (id: string | null) => void;
   cart: CartItem[];
-  addToCart: (product: Product) => void;
+  addToCart: (product: Product, quantity?: number) => void;
   updateCartQuantity: (id: string, delta: number) => void;
   toggleCartSelection: (id: string) => void;
   toggleAllCartSelections: (selected: boolean) => void;
@@ -127,6 +131,11 @@ interface MobileAppContextType {
   selectedCategory: string;
   setSelectedCategory: (cat: string) => void;
   products: Product[];
+
+  // Return Gifts Collection & Bulk Ordering
+  returnGifts: Product[];
+  returnGiftsLoading: boolean;
+  fetchReturnGifts: () => Promise<void>;
 
   // Dynamic States & Actions
   banners: any[];
@@ -146,7 +155,7 @@ interface MobileAppContextType {
   fetchBanners: () => Promise<void>;
   fetchCategories: () => Promise<void>;
   fetchFlashSale: () => Promise<void>;
-  
+
   // Category Discounts & Pricing Architecture
   activeDiscounts: CategoryDiscount[];
   discountsLoading: boolean;
@@ -219,6 +228,16 @@ export const useMobileApp = () => {
 import { BACKEND_URL, normalizeImageUrl, AUTH_TOKEN_KEY, USER_PROFILE_KEY, API_ENDPOINTS } from '../config/api';
 export { BACKEND_URL, normalizeImageUrl, AUTH_TOKEN_KEY, USER_PROFILE_KEY, API_ENDPOINTS };
 
+// Currency formatter supporting both integers and decimal prices (e.g. ₹16.50 vs ₹1,650)
+export const formatCurrency = (val: number | string | undefined | null): string => {
+  const num = Number(val);
+  if (isNaN(num)) return '0';
+  if (num % 1 !== 0) {
+    return num.toFixed(2);
+  }
+  return num.toLocaleString('en-IN');
+};
+
 // Category cleaner utility to map backend category folders to customer friendly titles
 export const mapCategoryLabel = (catName: string): string => {
   const mapping: { [key: string]: string } = {
@@ -281,6 +300,17 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [authModalVisible, setAuthModalVisibleState] = useState<boolean>(false);
 
+  // Synchronized refs to avoid stale closures during asynchronous authentication callbacks
+  const userRef = useRef<UserProfile | null>(null);
+  const authTokenRef = useRef<string | null>(null);
+  const isAuthenticatedRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    userRef.current = user;
+    authTokenRef.current = authToken;
+    isAuthenticatedRef.current = isAuthenticated;
+  }, [user, authToken, isAuthenticated]);
+
   const setAuthModalVisible = (visible: boolean) => {
     if (visible) {
       setSelectedProductId(null);
@@ -302,6 +332,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [flashSaleLoading, setFlashSaleLoading] = useState(true);
   const [productsLoading, setProductsLoading] = useState(true);
   const [discountsLoading, setDiscountsLoading] = useState(false);
+  const [returnGiftsLoading, setReturnGiftsLoading] = useState(false);
+
+  // Return Gifts state
+  const [returnGifts, setReturnGifts] = useState<Product[]>([]);
 
   // Active Category Discounts state
   const [activeDiscounts, setActiveDiscounts] = useState<CategoryDiscount[]>([]);
@@ -357,82 +391,145 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Map backend product data format to mobile client format (Two-Price Architecture: Strike Price & Actual Price)
+  // Map backend product data format to mobile client format (3-Price Architecture: Strike, Actual & Final)
   const mapBackendProduct = (p: any): Product => {
-    // 1. Raw Strike Price (MRP / original reference price)
+    // 1. Strike Price (MRP / Original reference retail price)
     const rawStrike = Number(
-      p.strikePrice ||
-      p.strike_price ||
-      p["act-price"] ||
-      p.mrp ||
-      0
+      p.strikePrice !== undefined ? p.strikePrice :
+        p.strike_price !== undefined ? p.strike_price :
+          p["act-price"] !== undefined ? p["act-price"] :
+            p.mrp !== undefined ? p.mrp :
+              0
     );
 
-    // 2. Raw Actual Price (Current selling purchase price manually controlled by admin)
+    // 2. Actual Price (Base selling price stored in backend catalog)
     const rawActual = Number(
       p.actualPrice !== undefined ? p.actualPrice :
-      p.actual_price !== undefined ? p.actual_price :
-      p.finalPrice !== undefined ? p.finalPrice :
-      p.final_price !== undefined ? p.final_price :
-      p.price !== undefined ? p.price : 0
+        p.actual_price !== undefined ? p.actual_price :
+          0
     );
 
-    const priceVal = rawActual > 0 ? rawActual : (rawStrike > 0 ? rawStrike : 0);
-    const strikeVal = rawStrike > priceVal ? rawStrike : (rawStrike > 0 ? rawStrike : priceVal);
-
-    // 3. Category Promotional Discount (calculated strictly on Strike Price)
+    // 3. Category Promotional Discount (e.g. 99% off)
     const catDiscountPercent = Number(
       p.categoryDiscountPercentage !== undefined ? p.categoryDiscountPercentage :
-      p.category_discount_percentage !== undefined ? p.category_discount_percentage :
-      p.discount_percentage !== undefined ? p.discount_percentage :
-      0
+        p.category_discount_percentage !== undefined ? p.category_discount_percentage :
+          0
     );
-
-    const catDiscountAmt = Number(
-      p.categoryDiscountAmount !== undefined ? p.categoryDiscountAmount :
-      p.category_discount_amount !== undefined ? p.category_discount_amount :
-      p.discount_amount !== undefined ? p.discount_amount :
-      (catDiscountPercent > 0 && strikeVal > 0 ? Math.round((strikeVal * catDiscountPercent) / 100) : 0)
-    );
-
-    const calculatedDiff = strikeVal > priceVal ? strikeVal - priceVal : 0;
-    const diff = Number(p.currentDifference !== undefined ? p.currentDifference : calculatedDiff);
-    const calculatedDiscountPercent = strikeVal > priceVal ? Math.round((diff / strikeVal) * 100) : 0;
-    const overallDiscountPercent = catDiscountPercent > 0 ? catDiscountPercent : calculatedDiscountPercent;
 
     const hasCatDiscount = Boolean(
-      p.hasCategoryDiscount ||
-      catDiscountPercent > 0
+      p.hasCategoryDiscount !== undefined
+        ? p.hasCategoryDiscount
+        : catDiscountPercent > 0
     );
 
-    const isDiscounted = Boolean(
-      p.isDiscounted !== undefined ? p.isDiscounted :
-      (strikeVal > priceVal || catDiscountPercent > 0)
+    const isReturnGift = Boolean(
+      p.isReturnGift ||
+      p.category === 'return_gifts' ||
+      p.category === 'Return Gifts' ||
+      String(p.id || '').startsWith('rg-')
     );
+
+    // 4. Final Price / Discounted Price (The dominant customer final price)
+    let finalPrice: number;
+    if (p.finalPrice !== undefined && Number(p.finalPrice) >= 0) {
+      finalPrice = Number(p.finalPrice);
+    } else if (p.discountedPrice !== undefined && Number(p.discountedPrice) >= 0) {
+      finalPrice = Number(p.discountedPrice);
+    } else if (isReturnGift && p.price !== undefined && Number(p.price) > 0) {
+      // For Return Gifts: p.price is the discounted wholesale selling price, p.actualPrice is MRP reference
+      finalPrice = Number(p.price);
+    } else if (hasCatDiscount && rawActual > 0 && catDiscountPercent > 0) {
+      // finalPrice = actualPrice - (actualPrice * categoryDiscountPercentage / 100)
+      finalPrice = Math.round((rawActual - (rawActual * catDiscountPercent / 100)) * 100) / 100;
+    } else if (rawActual > 0) {
+      finalPrice = rawActual;
+    } else if (p.price !== undefined && Number(p.price) >= 0) {
+      finalPrice = Number(p.price);
+    } else {
+      finalPrice = rawStrike > 0 ? rawStrike : 0;
+    }
+
+    const actualVal = isReturnGift && rawActual > 0 ? rawActual : (rawActual > 0 ? rawActual : (finalPrice > 0 ? finalPrice : rawStrike));
+    const strikeVal = isReturnGift && rawActual > finalPrice ? rawActual : (rawStrike > 0 ? rawStrike : (actualVal > finalPrice ? actualVal : finalPrice));
+
+    // Category discount amount
+    const catDiscountAmt = Number(
+      p.categoryDiscountAmount !== undefined ? p.categoryDiscountAmount :
+        p.category_discount_amount !== undefined ? p.category_discount_amount :
+          (hasCatDiscount && catDiscountPercent > 0 && actualVal > 0
+            ? Math.round((actualVal * catDiscountPercent) / 100)
+            : 0)
+    );
+
+    // Regular difference & discount percentage when category discount is OFF
+    const regularSavings = strikeVal > finalPrice ? strikeVal - finalPrice : 0;
+    const regularDiscountPercent = strikeVal > finalPrice && strikeVal > 0
+      ? Math.round((regularSavings / strikeVal) * 100)
+      : 0;
+
+    const effectiveDiscountPercent = hasCatDiscount && catDiscountPercent > 0
+      ? catDiscountPercent
+      : regularDiscountPercent;
+
+    const isDiscounted = hasCatDiscount || strikeVal > finalPrice;
 
     return {
       id: String(p.id || p.prod_id || ''),
       title: p.title || p.name || 'Ghar Sansar Product',
       name: p.name || p.title || 'Ghar Sansar Product',
       description: p.description || '',
-      price: priceVal,
-      actualPrice: priceVal,
-      strikePrice: strikeVal,
-      actPrice: strikeVal,
+      price: finalPrice, // Dominant customer final price
+      finalPrice, // Dominant customer final price
+      discountedPrice: finalPrice, // Alias for finalPrice
+      actualPrice: actualVal, // Base selling price (hidden when hasCategoryDiscount == true)
+      strikePrice: strikeVal, // MRP reference price (strikethrough when strikePrice > finalPrice)
+      actPrice: strikeVal, // Backward-compatible alias
       categoryDiscountPercentage: catDiscountPercent,
       categoryDiscountAmount: catDiscountAmt,
-      currentDifference: diff,
+      currentDifference: regularSavings,
       hasCategoryDiscount: hasCatDiscount,
       isDiscounted,
-      discountPercentage: overallDiscountPercent,
+      discountPercentage: effectiveDiscountPercent,
       image: p.image ? normalizeImageUrl(p.image) : '',
-      category: mapCategoryLabel(p.category || ''),
+      category: isReturnGift ? 'Return Gifts' : mapCategoryLabel(p.category || ''),
       subCategory: p.subCategory || '',
       rating: Number(p.rating) || 4.5,
       reviewsCount: Number(p.reviewsCount) || 12,
       matchPercent: Number(p.matchPercent) || 85,
       commentsCount: Number(p.commentsCount) || 0,
+      isReturnGift,
+      minOrderQuantity: isReturnGift ? 50 : 1,
     };
+  };
+
+  // Fetch Return Gifts from API
+  const fetchReturnGifts = async () => {
+    setReturnGiftsLoading(true);
+    try {
+      const primaryUrl = 'https://gharsansar.website/api/return_gifts?category=All+Gifts&limit=1000&delay=400';
+      let data: any = null;
+      try {
+        data = await fetchWithCache(primaryUrl, false, 8000);
+      } catch (err) {
+        console.warn('Fallback to backend URL for return gifts:', err);
+        data = await fetchWithCache(`${BACKEND_URL}/api/return_gifts?category=All+Gifts&limit=1000`, false, 8000);
+      }
+      const rawList = Array.isArray(data) ? data : (data?.products || data?.data || []);
+      const mapped = rawList.map((p: any) => mapBackendProduct({ ...p, isReturnGift: true, category: 'return_gifts' }));
+      setReturnGifts(mapped);
+      AsyncStorage.setItem('@cached_return_gifts', JSON.stringify(mapped)).catch(() => {});
+    } catch (err) {
+      console.warn('Failed to fetch return gifts from API:', err);
+      try {
+        const cached = await AsyncStorage.getItem('@cached_return_gifts');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) setReturnGifts(parsed);
+        }
+      } catch (cErr) {}
+    } finally {
+      setReturnGiftsLoading(false);
+    }
   };
 
   // Fetch all banners
@@ -445,7 +542,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         image: b.image ? normalizeImageUrl(b.image) : b.image
       }));
       setBanners(mappedBanners);
-      AsyncStorage.setItem('@cached_banners', JSON.stringify(mappedBanners)).catch(() => {});
+      AsyncStorage.setItem('@cached_banners', JSON.stringify(mappedBanners)).catch(() => { });
     } catch (err) {
       console.warn('Failed to fetch banners from API:', err);
       try {
@@ -454,7 +551,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed) && parsed.length > 0) setBanners(parsed);
         }
-      } catch (cErr) {}
+      } catch (cErr) { }
     } finally {
       setBannersLoading(false);
     }
@@ -519,7 +616,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         });
 
         setCategories(mapped);
-        AsyncStorage.setItem('@cached_categories', JSON.stringify(mapped)).catch(() => {});
+        AsyncStorage.setItem('@cached_categories', JSON.stringify(mapped)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch categories from API:', err);
@@ -543,7 +640,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
             setCategories(updated);
           }
         }
-      } catch (cErr) {}
+      } catch (cErr) { }
     } finally {
       setCategoriesLoading(false);
     }
@@ -560,14 +657,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           products: (data.products || []).map(mapBackendProduct)
         };
         setFlashSale(mappedFlashSale);
-        AsyncStorage.setItem('@cached_flashsale', JSON.stringify(mappedFlashSale)).catch(() => {});
+        AsyncStorage.setItem('@cached_flashsale', JSON.stringify(mappedFlashSale)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch flashsale from API:', err);
       try {
         const cached = await AsyncStorage.getItem('@cached_flashsale');
         if (cached) setFlashSale(JSON.parse(cached));
-      } catch (cErr) {}
+      } catch (cErr) { }
     } finally {
       setFlashSaleLoading(false);
     }
@@ -580,7 +677,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const data = await fetchWithCache(API_ENDPOINTS.ACTIVE_DISCOUNTS);
       if (data && data.success && Array.isArray(data.data)) {
         setActiveDiscounts(data.data);
-        AsyncStorage.setItem('@cached_active_discounts', JSON.stringify(data.data)).catch(() => {});
+        AsyncStorage.setItem('@cached_active_discounts', JSON.stringify(data.data)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch active discounts:', err);
@@ -590,7 +687,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           const parsed = JSON.parse(cached);
           if (Array.isArray(parsed)) setActiveDiscounts(parsed);
         }
-      } catch (cErr) {}
+      } catch (cErr) { }
     } finally {
       setDiscountsLoading(false);
     }
@@ -632,7 +729,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
         if (flatList.length > 0) {
           setProducts(flatList);
-          AsyncStorage.setItem('@cached_products', JSON.stringify(flatList)).catch(() => {});
+          AsyncStorage.setItem('@cached_products', JSON.stringify(flatList)).catch(() => { });
           return;
         }
       }
@@ -648,7 +745,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           if (pageData && Array.isArray(pageData.products) && pageData.products.length > 0) {
             const mapped = pageData.products.map(mapBackendProduct);
             setProducts(mapped);
-            AsyncStorage.setItem('@cached_products', JSON.stringify(mapped)).catch(() => {});
+            AsyncStorage.setItem('@cached_products', JSON.stringify(mapped)).catch(() => { });
             return;
           }
         }
@@ -667,7 +764,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
             return;
           }
         }
-      } catch (cacheErr) {}
+      } catch (cacheErr) { }
       setProducts([]);
     } finally {
       setProductsLoading(false);
@@ -707,7 +804,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     setHasMoreProducts(true);
     setPaginatedProducts([]);
     setPaginatedLoading(true);
-    fetchActiveDiscounts().catch(() => {});
+    fetchActiveDiscounts().catch(() => { });
     try {
       const url = `${BACKEND_URL}/api/products/paginated?page=1&limit=10`;
       const data = await fetchWithCache(url, true); // Force bypass cache on refresh
@@ -780,7 +877,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     const nextFavorites = favorites.includes(id)
       ? favorites.filter(item => item !== id)
       : [...favorites, id];
-    
+
     setFavorites(nextFavorites);
     try {
       await AsyncStorage.setItem('favorites', JSON.stringify(nextFavorites));
@@ -906,13 +1003,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   useEffect(() => {
     if (selectedProductId) {
       const found = products.find(p => p.id === selectedProductId) ||
-                    paginatedProducts.find(p => p.id === selectedProductId) ||
-                    (flashSale && flashSale.products.find(p => p.id === selectedProductId));
+        paginatedProducts.find(p => p.id === selectedProductId) ||
+        (flashSale && flashSale.products.find(p => p.id === selectedProductId)) ||
+        returnGifts.find(p => p.id === selectedProductId);
       if (found) {
         addToRecentlyViewed(found);
       }
     }
-  }, [selectedProductId, products, paginatedProducts, flashSale]);
+  }, [selectedProductId, products, paginatedProducts, flashSale, returnGifts]);
 
   const addRecentSearch = (query: string) => {
     if (!query.trim()) return;
@@ -971,7 +1069,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (storedCart) {
           try {
             setCart(JSON.parse(storedCart));
-          } catch (e) {}
+          } catch (e) { }
         }
 
         // 2. Restore token & user profile
@@ -1006,6 +1104,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         }
 
         if (activeUser) {
+          userRef.current = activeUser;
+          isAuthenticatedRef.current = true;
+          authTokenRef.current = storedToken;
           setUser(activeUser);
           setIsAuthenticated(true);
           fetchOrdersForUser(activeUser, storedToken);
@@ -1040,6 +1141,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           }
         } else {
           // Explicitly clear unauthenticated guest session
+          userRef.current = null;
+          isAuthenticatedRef.current = false;
+          authTokenRef.current = null;
           setUser(null);
           setIsAuthenticated(false);
           setCurrentAddress(null);
@@ -1058,6 +1162,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       await Promise.all([
         fetchActiveDiscounts(),
         fetchAllProducts(),
+        fetchReturnGifts(),
         fetchBanners(),
         fetchCategories(),
         fetchFlashSale(),
@@ -1066,10 +1171,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         restoreAuthSession()
       ]);
     };
-    
+
     initializeData();
     registerForPushNotificationsAsync();
-    
+
     // Add foreground notification listener
     let notificationListener: any = null;
     try {
@@ -1157,41 +1262,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       if (res.ok) {
         const data = await res.json();
         if (data.success && data.cart && Array.isArray(data.cart.items)) {
-          const mapped: CartItem[] = data.cart.items.map((bi: any) => {
-            const strikeVal = Number(bi.strikePrice || bi.actPrice || bi.price) || 0;
-            const priceVal = Number(bi.actualPrice || bi.price) || 0;
-            const diff = strikeVal > priceVal ? strikeVal - priceVal : 0;
-            const discPercent = strikeVal > priceVal ? Math.round((diff / strikeVal) * 100) : 0;
-            const catDiscount = Number(bi.categoryDiscountPercentage || 0);
-
-            return {
-              product: {
-                id: String(bi.productId || bi.id || ''),
-                title: bi.name || bi.title || '',
-                name: bi.name || bi.title || '',
-                description: bi.description || '',
-                price: priceVal,
-                actualPrice: priceVal,
-                strikePrice: strikeVal,
-                actPrice: strikeVal,
-                categoryDiscountPercentage: catDiscount,
-                categoryDiscountAmount: Number(bi.categoryDiscountAmount || 0),
-                currentDifference: diff,
-                hasCategoryDiscount: Boolean(bi.hasCategoryDiscount || catDiscount > 0),
-                isDiscounted: Boolean(bi.isDiscounted || strikeVal > priceVal || catDiscount > 0),
-                discountPercentage: catDiscount > 0 ? catDiscount : discPercent,
-                image: bi.image ? normalizeImageUrl(bi.image) : '',
-                category: mapCategoryLabel(bi.category || ''),
-                subCategory: bi.subCategory || '',
-                rating: 4.5,
-                reviewsCount: 12,
-                matchPercent: 90,
-                commentsCount: 0,
-              },
-              quantity: Number(bi.quantity) || 1,
-              selected: true,
-            };
-          });
+          const mapped: CartItem[] = data.cart.items.map((bi: any) => ({
+            product: mapBackendProduct({
+              ...bi,
+              id: bi.productId || bi.id,
+            }),
+            quantity: Number(bi.quantity) || 1,
+            selected: true,
+          }));
           setCart(mapped);
           await AsyncStorage.setItem('cart', JSON.stringify(mapped));
         }
@@ -1216,7 +1294,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
             guestItems: cart.map(i => ({
               productId: i.product.id,
               name: i.product.title || i.product.name,
-              price: i.product.price,
+              price: i.product.finalPrice !== undefined ? i.product.finalPrice : i.product.price,
               quantity: i.quantity,
               image: i.product.image,
             })),
@@ -1267,6 +1345,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   // Reusable helper to set authenticated session, tokens, address, and profile
   const applyAuthenticatedSession = async (userObj: any, token: string) => {
+    userRef.current = userObj;
+    isAuthenticatedRef.current = true;
+    authTokenRef.current = token;
     setAuthToken(token);
     setUser(userObj);
     setIsAuthenticated(true);
@@ -1302,7 +1383,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   // Replay & race condition protection for OAuth codes (Requirement 6)
   const processedAuthCodesRef = useRef<Set<string>>(new Set());
-  const isExchangingRef = useRef<boolean>(false);
+  const activeExchangePromiseRef = useRef<Promise<{ success: boolean; error?: string; isProfileIncomplete?: boolean }> | null>(null);
+  const lastExchangeResultRef = useRef<{ success: boolean; error?: string; isProfileIncomplete?: boolean } | null>(null);
 
   const exchangeMobileCode = async (
     code: string
@@ -1315,49 +1397,48 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       return { success: false, error: 'Invalid authorization code' };
     }
 
-    // Requirement 6: Prevent Duplicate Code Processing
-    if (processedAuthCodesRef.current.has(cleanCode) || isExchangingRef.current) {
-      console.log('[Google Auth Bridge] Code already processing or already exchanged. Skipping duplicate.');
-      return { success: false, error: 'Authorization code already processed.' };
+    // If an exchange is already in progress, coalesce and wait for the existing exchange
+    if (activeExchangePromiseRef.current) {
+      console.log('[Google Auth Bridge] Exchange already in progress, coalescing callers...');
+      return await activeExchangePromiseRef.current;
     }
 
-    isExchangingRef.current = true;
+    // Requirement 6: Prevent Duplicate Code Processing
+    if (processedAuthCodesRef.current.has(cleanCode)) {
+      console.log('[Google Auth Bridge] Code already processed.');
+      if (lastExchangeResultRef.current) {
+        return lastExchangeResultRef.current;
+      }
+      if (isAuthenticatedRef.current || userRef.current) {
+        return { success: true };
+      }
+      return { success: true };
+    }
+
     processedAuthCodesRef.current.add(cleanCode);
     setAuthLoading(true);
 
-    try {
-      console.log('[Google Auth Bridge] Exchanging one-time code with backend...');
+    const exchangeTask = (async () => {
+      try {
+        console.log('[Google Auth Bridge] Exchanging one-time code with backend...');
 
-      // 1. Primary endpoint: POST https://gharsansar.website/api/v1/auth/exchange-code
-      let response: Response | null = await fetch('https://gharsansar.website/api/v1/auth/exchange-code', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({ code: cleanCode }),
-      }).catch((e) => {
-        console.warn('[Google Auth Bridge] Primary endpoint network error:', e.message);
-        return null;
-      });
-
-      // 2. Resilient fallback to backend domain if website proxy is unreachable or 5xx
-      if (!response || !response.ok) {
-        console.log('[Google Auth Bridge] Trying backend direct exchange endpoint...');
-        const altRes = await fetch(`${BACKEND_URL}/api/v1/auth/exchange-code`, {
+        // 1. Primary endpoint: POST https://gharsansar.website/api/v1/auth/exchange-code
+        let response: Response | null = await fetch('https://gharsansar.website/api/v1/auth/exchange-code', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
           body: JSON.stringify({ code: cleanCode }),
-        }).catch(() => null);
+        }).catch((e) => {
+          console.warn('[Google Auth Bridge] Primary endpoint network error:', e.message);
+          return null;
+        });
 
-        if (altRes && altRes.ok) {
-          response = altRes;
-        } else {
-          // 3. Fallback to /mobile-code/exchange endpoint
-          const altRes2 = await fetch(`${BACKEND_URL}/api/v1/auth/mobile-code/exchange`, {
+        // 2. Resilient fallback to backend domain if website proxy is unreachable or 5xx
+        if (!response || !response.ok) {
+          console.log('[Google Auth Bridge] Trying backend direct exchange endpoint...');
+          const altRes = await fetch(`${BACKEND_URL}/api/v1/auth/exchange-code`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -1365,42 +1446,70 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
             },
             body: JSON.stringify({ code: cleanCode }),
           }).catch(() => null);
-          if (altRes2 && altRes2.ok) {
-            response = altRes2;
+
+          if (altRes && altRes.ok) {
+            response = altRes;
+          } else {
+            // 3. Fallback to /mobile-code/exchange endpoint
+            const altRes2 = await fetch(`${BACKEND_URL}/api/v1/auth/mobile-code/exchange`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json',
+              },
+              body: JSON.stringify({ code: cleanCode }),
+            }).catch(() => null);
+            if (altRes2 && altRes2.ok) {
+              response = altRes2;
+            }
           }
         }
-      }
 
-      if (!response) {
-        return { success: false, error: 'Unable to sign you in. Please try again.' };
-      }
-
-      const data = await response.json().catch(() => null);
-
-      if (response.ok && data && (data.success || data.token) && data.user) {
-        const activeToken = data.token || data.legacyToken || `user_token_${data.user.id || data.user._id}`;
-        await applyAuthenticatedSession(data.user, activeToken);
-
-        if (data.isProfileIncomplete) {
-          setActiveTab('account');
-          return { success: true, isProfileIncomplete: true };
-        } else {
-          setActiveTab('home');
-          return { success: true, isProfileIncomplete: false };
+        if (!response) {
+          const errRes = { success: false, error: 'Unable to sign you in. Please try again.' };
+          lastExchangeResultRef.current = errRes;
+          return errRes;
         }
-      }
 
-      return {
-        success: false,
-        error: data?.error || data?.message || 'Unable to sign you in. Please try again.',
-      };
-    } catch (err: any) {
-      console.warn('[Google Auth Bridge] Code exchange exception:', err);
-      return { success: false, error: 'Unable to sign you in. Please try again.' };
-    } finally {
-      isExchangingRef.current = false;
-      setAuthLoading(false);
-    }
+        const data = await response.json().catch(() => null);
+
+        if (response.ok && data && (data.success || data.token) && data.user) {
+          const activeToken = data.token || data.legacyToken || `user_token_${data.user.id || data.user._id}`;
+          await applyAuthenticatedSession(data.user, activeToken);
+
+          const successRes = {
+            success: true,
+            isProfileIncomplete: Boolean(data.isProfileIncomplete),
+          };
+          lastExchangeResultRef.current = successRes;
+
+          if (data.isProfileIncomplete) {
+            setActiveTab('account');
+          } else {
+            setActiveTab('home');
+          }
+          return successRes;
+        }
+
+        const failRes = {
+          success: false,
+          error: data?.error || data?.message || 'Unable to sign you in. Please try again.',
+        };
+        lastExchangeResultRef.current = failRes;
+        return failRes;
+      } catch (err: any) {
+        console.warn('[Google Auth Bridge] Code exchange exception:', err);
+        const excRes = { success: false, error: 'Unable to sign you in. Please try again.' };
+        lastExchangeResultRef.current = excRes;
+        return excRes;
+      } finally {
+        activeExchangePromiseRef.current = null;
+        setAuthLoading(false);
+      }
+    })();
+
+    activeExchangePromiseRef.current = exchangeTask;
+    return await exchangeTask;
   };
 
   const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
@@ -1411,22 +1520,69 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       console.log('[Google Auth Bridge] Launching Chrome Custom Tab / Auth Session...');
       const result = await WebBrowser.openAuthSessionAsync(authUrl, 'gharsansar://auth/callback');
 
+      // 1. If WebBrowser caught the deep link redirect directly
       if (result.type === 'success' && result.url) {
         const code = extractAuthCodeFromUrl(result.url);
         if (code) {
           return await exchangeMobileCode(code);
-        } else {
-          return { success: false, error: 'Unable to sign you in. Please try again.' };
         }
-      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+      }
+
+      // 2. If Linking listener already caught the intent on Android and is exchanging, await that promise!
+      if (activeExchangePromiseRef.current) {
+        console.log('[Google Auth Bridge] In-flight exchange detected from intent, waiting...');
+        const res = await activeExchangePromiseRef.current;
+        if (res.success || isAuthenticatedRef.current || userRef.current) {
+          return { success: true };
+        }
+      }
+
+      // 3. If session is already authenticated, return success immediately
+      if (isAuthenticatedRef.current || userRef.current) {
+        return { success: true };
+      }
+
+      // 4. On Android, when deep link opens the app, the custom tab dismisses.
+      // Poll for up to 2.5 seconds (in 100ms increments) for intent / exchange to complete
+      if (result.type === 'cancel' || result.type === 'dismiss') {
+        for (let i = 0; i < 25; i++) {
+          if (activeExchangePromiseRef.current) {
+            const res = await activeExchangePromiseRef.current;
+            if (res.success || isAuthenticatedRef.current || userRef.current) {
+              return { success: true };
+            }
+          }
+          if (isAuthenticatedRef.current || userRef.current) {
+            return { success: true };
+          }
+          await new Promise((r) => setTimeout(r, 100));
+        }
+
+        if (isAuthenticatedRef.current || userRef.current) {
+          return { success: true };
+        }
+
         console.log('[Google Auth Bridge] Browser dismissed by user.');
         return { success: false, error: 'Authentication cancelled' };
       }
 
-      return { success: false, error: 'Unable to sign you in. Please try again.' };
+      if (isAuthenticatedRef.current || userRef.current) {
+        return { success: true };
+      }
+
+      return { success: false, error: 'Authentication cancelled' };
     } catch (err: any) {
       console.warn('[Google Auth Bridge] WebBrowser error:', err);
-      return { success: false, error: 'Unable to sign you in. Please try again.' };
+      if (activeExchangePromiseRef.current) {
+        const res = await activeExchangePromiseRef.current;
+        if (res.success || isAuthenticatedRef.current || userRef.current) {
+          return { success: true };
+        }
+      }
+      if (isAuthenticatedRef.current || userRef.current) {
+        return { success: true };
+      }
+      return { success: false, error: 'Authentication cancelled' };
     } finally {
       setAuthLoading(false);
     }
@@ -1538,6 +1694,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const logout = async () => {
+    userRef.current = null;
+    authTokenRef.current = null;
+    isAuthenticatedRef.current = false;
+    processedAuthCodesRef.current.clear();
+    lastExchangeResultRef.current = null;
     setUser(null);
     setAuthToken(null);
     setIsAuthenticated(false);
@@ -1640,7 +1801,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     const fallbackOrderNumber = `GS${Date.now().toString().slice(-8)}`;
 
     const effectiveUserId = String(orderPayload.userId || user?.id || (user as any)?._id || user?.email || 'guest');
-    
+
     // Normalize customer details
     const customerObj = {
       firstName: (orderPayload.customer?.firstName || user?.name || (user as any)?.full_name || 'Customer').trim(),
@@ -1664,16 +1825,16 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     // Normalize items array
     const cleanItems = Array.isArray(orderPayload.items)
       ? orderPayload.items.map((item: any) => ({
-          id: String(item.id || item.productId || `item_${Date.now()}`),
-          productId: String(item.productId || item.id || ''),
-          name: String(item.name || item.title || 'Product'),
-          price: Number(item.price) || 0,
-          quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
-          image: item.image || '',
-          selectedSize: item.selectedSize || '',
-          selectedColor: item.selectedColor || '',
-          isReturnGift: Boolean(item.isReturnGift),
-        }))
+        id: String(item.id || item.productId || `item_${Date.now()}`),
+        productId: String(item.productId || item.id || ''),
+        name: String(item.name || item.title || 'Product'),
+        price: Number(item.price !== undefined ? item.price : item.finalPrice) || 0,
+        quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
+        image: item.image || '',
+        selectedSize: item.selectedSize || '',
+        selectedColor: item.selectedColor || '',
+        isReturnGift: Boolean(item.isReturnGift),
+      }))
       : [];
 
     const finalSubtotal = Number(orderPayload.subtotal) || cleanItems.reduce((acc: number, itm: any) => acc + itm.price * itm.quantity, 0);
@@ -1787,7 +1948,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         const stored = await AsyncStorage.getItem('user_orders');
         const current = stored ? JSON.parse(stored) : [];
         await AsyncStorage.setItem('user_orders', JSON.stringify([newOrderObj, ...current.filter((o: any) => o.id !== confirmedId)]));
-      } catch {}
+      } catch { }
 
       // Refresh orders from server to ensure perfect sync
       fetchOrdersForUser();
@@ -1804,7 +1965,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const stored = await AsyncStorage.getItem('user_orders');
       const current = stored ? JSON.parse(stored) : [];
       await AsyncStorage.setItem('user_orders', JSON.stringify([localOrder, ...current]));
-    } catch {}
+    } catch { }
     return { success: true, orderId: fallbackOrderId };
   };
 
@@ -1815,28 +1976,46 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   }, [products]);
 
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, quantity?: number) => {
     if (!isAuthenticated || !user) {
       setSelectedProductId(null);
       setActiveTab('account');
       return;
     }
 
+    const isReturnGift = Boolean(
+      product.isReturnGift ||
+      product.category === 'Return Gifts' ||
+      product.category === 'return_gifts' ||
+      String(product.id).startsWith('rg-')
+    );
+    const minQty = isReturnGift ? 50 : 1;
+    const initialQty = quantity !== undefined 
+      ? (isReturnGift ? Math.max(50, quantity) : Math.max(1, quantity))
+      : minQty;
+
     setCart((prevCart) => {
       const existing = prevCart.find((item) => item.product.id === product.id);
       let updated;
       if (existing) {
+        const step = quantity !== undefined ? quantity : (isReturnGift ? 10 : 1);
+        const newQty = existing.quantity + step;
         updated = prevCart.map((item) =>
-          item.product.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.product.id === product.id ? { ...item, quantity: newQty } : item
         );
       } else {
-        updated = [...prevCart, { product, quantity: 1, selected: true }];
+        updated = [...prevCart, { product, quantity: initialQty, selected: true }];
       }
-      AsyncStorage.setItem('cart', JSON.stringify(updated)).catch(() => {});
+      AsyncStorage.setItem('cart', JSON.stringify(updated)).catch(() => { });
       return updated;
     });
 
     if (authToken) {
+      const existing = cart.find(i => i.product.id === product.id);
+      const syncQty = existing 
+        ? existing.quantity + (quantity !== undefined ? quantity : (isReturnGift ? 10 : 1))
+        : initialQty;
+
       fetch(`${BACKEND_URL}/api/v1/cart/items`, {
         method: 'POST',
         headers: {
@@ -1846,8 +2025,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         body: JSON.stringify({
           productId: product.id,
           name: product.title || product.name,
-          price: product.price,
-          quantity: 1,
+          price: product.finalPrice !== undefined ? product.finalPrice : product.price,
+          quantity: syncQty,
           image: product.image,
         }),
       }).catch(e => console.warn('Sync addToCart error:', e));
@@ -1861,25 +2040,51 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       return;
     }
 
+    let finalNextQty = 0;
+
     setCart((prevCart) => {
       const updated = prevCart
         .map((item) => {
           if (item.product.id === id) {
+            const isReturnGift = Boolean(
+              item.product.isReturnGift ||
+              item.product.category === 'Return Gifts' ||
+              item.product.category === 'return_gifts' ||
+              String(item.product.id).startsWith('rg-')
+            );
             const nextQty = item.quantity + delta;
+
+            // Strict bulk rule: There is no concept of less than 50 products for Return Gifts
+            if (isReturnGift) {
+              if (nextQty < 50) {
+                finalNextQty = 0;
+                return { ...item, quantity: 0 };
+              }
+              finalNextQty = nextQty;
+              return { ...item, quantity: nextQty };
+            }
+
+            finalNextQty = nextQty;
             return { ...item, quantity: nextQty };
           }
           return item;
         })
         .filter((item) => item.quantity > 0);
-      AsyncStorage.setItem('cart', JSON.stringify(updated)).catch(() => {});
+      AsyncStorage.setItem('cart', JSON.stringify(updated)).catch(() => { });
       return updated;
     });
 
     if (authToken) {
       const currentItem = cart.find(i => i.product.id === id);
       if (currentItem) {
+        const isReturnGift = Boolean(
+          currentItem.product.isReturnGift ||
+          currentItem.product.category === 'Return Gifts' ||
+          currentItem.product.category === 'return_gifts' ||
+          String(currentItem.product.id).startsWith('rg-')
+        );
         const nextQty = currentItem.quantity + delta;
-        if (nextQty > 0) {
+        if (nextQty > 0 && (!isReturnGift || nextQty >= 50)) {
           fetch(`${BACKEND_URL}/api/v1/cart/items/${id}`, {
             method: 'PUT',
             headers: {
@@ -1931,6 +2136,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         selectedCategory,
         setSelectedCategory,
         products,
+
+        // Return Gifts Collection & Bulk Ordering
+        returnGifts,
+        returnGiftsLoading,
+        fetchReturnGifts,
 
         // Dynamic API properties
         banners,

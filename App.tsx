@@ -11,6 +11,7 @@ import HomeView from './src/pages/HomeView';
 import ExploreView from './src/pages/ExploreView';
 import CartView from './src/pages/CartView';
 import FavoritesView from './src/pages/FavoritesView';
+import ReturnGiftsView from './src/pages/ReturnGiftsView';
 import ProfileView from './src/pages/ProfileView';
 import ProductDetailView from './src/pages/ProductDetailView';
 
@@ -77,6 +78,8 @@ const AppContent: React.FC = () => {
           <ExploreView />
         ) : activeTab === 'cart' ? (
           <CartView />
+        ) : activeTab === 'returnGifts' ? (
+          <ReturnGiftsView />
         ) : activeTab === 'wishlist' ? (
           <FavoritesView />
         ) : (

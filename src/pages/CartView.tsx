@@ -1,7 +1,19 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Alert, TextInput, Modal, ActivityIndicator } from 'react-native';
+import {
+  StyleSheet,
+  Text,
+  View,
+  ScrollView,
+  TouchableOpacity,
+  Alert,
+  TextInput,
+  Modal,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+} from 'react-native';
 import { Feather, FontAwesome } from '@expo/vector-icons';
-import { useMobileApp } from '../context/MobileAppContext';
+import { useMobileApp, formatCurrency } from '../context/MobileAppContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PremiumImage } from '../components/PremiumImage';
 import EmptyState from '../components/EmptyState';
@@ -50,13 +62,21 @@ const CartView: React.FC = () => {
     toggleAllCartSelections(!allSelected);
   };
 
-  // Subtotal & MRP calculations (Controlled Two-Price Architecture: Strike Price vs Actual Price)
+  // Subtotal & MRP calculations (3-Price Architecture: Strike Price vs Final Price)
   const rawSubtotal = selectedItems.reduce(
-    (sum, item) => sum + (item.product.actualPrice || item.product.price) * item.quantity,
+    (sum, item) => {
+      const p = item.product;
+      const finalPrice = p.finalPrice !== undefined ? p.finalPrice : (p.price !== undefined ? p.price : p.actualPrice);
+      return sum + finalPrice * item.quantity;
+    },
     0
   );
   const rawMrpTotal = selectedItems.reduce(
-    (sum, item) => sum + (item.product.strikePrice || item.product.actPrice || item.product.price) * item.quantity,
+    (sum, item) => {
+      const p = item.product;
+      const strike = p.strikePrice || p.actPrice || (p.finalPrice !== undefined ? p.finalPrice : p.price);
+      return sum + strike * item.quantity;
+    },
     0
   );
   const productSavings = Math.max(0, rawMrpTotal - rawSubtotal);
@@ -98,7 +118,7 @@ const CartView: React.FC = () => {
       return;
     }
     await saveShippingAddress({
-      name: addrName.trim() || user?.name || 'Customer',
+      name: addrName.trim() || user?.name || (user as any)?.full_name || 'Customer',
       phone: addrPhone.trim() || user?.phone || '',
       address: addrStreet.trim(),
       city: addrCity.trim(),
@@ -107,7 +127,12 @@ const CartView: React.FC = () => {
       isDefault: true,
     });
     setShowAddressModal(false);
-    Alert.alert('Address Saved', 'Your delivery address has been saved.');
+    const selectedItems = cart.filter((i) => i.selected);
+    if (selectedItems.length > 0) {
+      setShowConfirmModal(true);
+    } else {
+      Alert.alert('Address Saved', 'Your delivery address has been saved.');
+    }
   };
 
   const executeOrderPlacement = async () => {
@@ -147,7 +172,7 @@ const CartView: React.FC = () => {
         id: String(item.product.id),
         productId: String(item.product.id),
         name: item.product.title || item.product.name,
-        price: Number(item.product.price) || 0,
+        price: Number(item.product.finalPrice !== undefined ? item.product.finalPrice : item.product.price) || 0,
         quantity: item.quantity,
         image: item.product.image || '',
         selectedSize: (item as any).selectedSize || '',
@@ -324,23 +349,30 @@ const CartView: React.FC = () => {
               </TouchableOpacity>
 
               <Text style={styles.selectionNote}>
-                {selectedCount > 0 ? `₹${rawSubtotal.toLocaleString()}` : 'None selected'}
+                {selectedCount > 0 ? `₹${formatCurrency(rawSubtotal)}` : 'None selected'}
               </Text>
             </View>
 
             {/* 4. Cart Product Items */}
             <View style={styles.itemsList}>
               {cart.map((item) => {
-                const itemStrike = item.product.strikePrice || item.product.actPrice || item.product.price;
-                const itemPrice = item.product.actualPrice || item.product.price;
+                const itemFinal = item.product.finalPrice !== undefined ? item.product.finalPrice : (item.product.price !== undefined ? item.product.price : item.product.actualPrice);
+                const itemStrike = item.product.strikePrice || item.product.actPrice || itemFinal;
                 const qty = item.quantity || 1;
-                const linePrice = itemPrice * qty;
+                const linePrice = itemFinal * qty;
                 const lineStrike = itemStrike * qty;
                 const hasItemSavings = lineStrike > linePrice;
                 const hasCatPromo = Boolean(item.product.hasCategoryDiscount && item.product.categoryDiscountPercentage > 0);
-                const discount = hasCatPromo
-                  ? item.product.categoryDiscountPercentage
-                  : (item.product.discountPercentage || (hasItemSavings ? Math.round(((lineStrike - linePrice) / lineStrike) * 100) : 0));
+                const discountBadgeText = hasCatPromo
+                  ? `${item.product.categoryDiscountPercentage}% OFF`
+                  : (hasItemSavings && lineStrike > 0 ? `${Math.round(((lineStrike - linePrice) / lineStrike) * 100)}% OFF` : null);
+
+                const isItemReturnGift = Boolean(
+                  item.product.isReturnGift ||
+                  item.product.category === 'Return Gifts' ||
+                  item.product.category === 'return_gifts' ||
+                  String(item.product.id).startsWith('rg-')
+                );
 
                 return (
                   <View key={item.product.id} style={styles.cartCard}>
@@ -380,26 +412,34 @@ const CartView: React.FC = () => {
                           </Text>
                         </TouchableOpacity>
 
-                        <Text style={styles.categoryBadge}>{item.product.category}</Text>
+                        {isItemReturnGift ? (
+                          <View style={styles.returnGiftCartBadge}>
+                            <Text style={styles.returnGiftCartBadgeText}>🎁 Bulk Gift (Min 50 pcs)</Text>
+                          </View>
+                        ) : (
+                          <Text style={styles.categoryBadge}>{item.product.category}</Text>
+                        )}
 
                         <View style={styles.priceRow}>
                           <Text style={styles.currentPrice}>
-                            ₹{linePrice.toLocaleString()}
+                            ₹{formatCurrency(linePrice)}
                           </Text>
                           {hasItemSavings && (
                             <>
                               <Text style={styles.mrpPrice}>
-                                ₹{lineStrike.toLocaleString()}
+                                ₹{formatCurrency(lineStrike)}
                               </Text>
-                              <Text style={styles.discountBadge}>
-                                {hasCatPromo ? `${item.product.categoryDiscountPercentage}% OFF` : `${discount}% OFF`}
-                              </Text>
+                              {discountBadgeText && (
+                                <Text style={styles.discountBadge}>
+                                  {discountBadgeText}
+                                </Text>
+                              )}
                             </>
                           )}
                         </View>
                         {qty > 1 && (
                           <Text style={styles.unitPriceHint}>
-                            (₹{itemPrice.toLocaleString()} each)
+                            (₹{formatCurrency(itemFinal)} each)
                           </Text>
                         )}
                       </View>
@@ -414,7 +454,28 @@ const CartView: React.FC = () => {
                         <TouchableOpacity
                           style={styles.stepperBtn}
                           activeOpacity={0.7}
-                          onPress={() => updateCartQuantity(item.product.id, -1)}
+                          onPress={() => {
+                            if (isItemReturnGift) {
+                              if (item.quantity <= 50) {
+                                Alert.alert(
+                                  'Remove Return Gift?',
+                                  'Return gifts require a minimum order of 50 units. Would you like to remove this item from your cart?',
+                                  [
+                                    { text: 'Keep in Cart', style: 'cancel' },
+                                    {
+                                      text: 'Remove',
+                                      style: 'destructive',
+                                      onPress: () => updateCartQuantity(item.product.id, -item.quantity),
+                                    },
+                                  ]
+                                );
+                              } else {
+                                updateCartQuantity(item.product.id, -1);
+                              }
+                            } else {
+                              updateCartQuantity(item.product.id, -1);
+                            }
+                          }}
                         >
                           <Feather name="minus" size={14} color={tokens.colors.primary} />
                         </TouchableOpacity>
@@ -514,14 +575,14 @@ const CartView: React.FC = () => {
 
               <View style={styles.billRow}>
                 <Text style={styles.billLabel}>Total MRP</Text>
-                <Text style={styles.billValue}>₹{rawMrpTotal.toLocaleString()}</Text>
+                <Text style={styles.billValue}>₹{formatCurrency(rawMrpTotal)}</Text>
               </View>
 
               {productSavings > 0 && (
                 <View style={styles.billRow}>
                   <Text style={styles.billLabel}>Discount on MRP</Text>
                   <Text style={[styles.billValue, styles.billSavings]}>
-                    -₹{productSavings.toLocaleString()}
+                    -₹{formatCurrency(productSavings)}
                   </Text>
                 </View>
               )}
@@ -530,7 +591,7 @@ const CartView: React.FC = () => {
                 <View style={styles.billRow}>
                   <Text style={styles.billLabel}>Coupon Discount</Text>
                   <Text style={[styles.billValue, styles.billSavings]}>
-                    -₹{couponDiscount.toLocaleString()}
+                    -₹{formatCurrency(couponDiscount)}
                   </Text>
                 </View>
               )}
@@ -554,14 +615,14 @@ const CartView: React.FC = () => {
                   <Text style={styles.totalLabel}>Total Amount</Text>
                   <Text style={styles.totalSubLabel}>Inclusive of all taxes</Text>
                 </View>
-                <Text style={styles.totalAmount}>₹{finalTotal.toLocaleString()}</Text>
+                <Text style={styles.totalAmount}>₹{formatCurrency(finalTotal)}</Text>
               </View>
 
               {productSavings + couponDiscount > 0 && (
                 <View style={styles.totalSavingsBanner}>
                   <Feather name="check" size={15} color={tokens.colors.savings} />
                   <Text style={styles.totalSavingsText}>
-                    You will save ₹{(productSavings + couponDiscount).toLocaleString()} on this order
+                    You will save ₹{formatCurrency(productSavings + couponDiscount)} on this order
                   </Text>
                 </View>
               )}
@@ -614,7 +675,7 @@ const CartView: React.FC = () => {
           <View style={styles.checkoutBar}>
             <View style={styles.checkoutPriceCol}>
               <Text style={styles.checkoutTotalLabel}>TOTAL AMOUNT</Text>
-              <Text style={styles.checkoutTotalPrice}>₹{finalTotal.toLocaleString()}</Text>
+              <Text style={styles.checkoutTotalPrice}>₹{formatCurrency(finalTotal)}</Text>
             </View>
 
             <TouchableOpacity
@@ -648,8 +709,11 @@ const CartView: React.FC = () => {
         transparent={true}
         onRequestClose={() => setShowAddressModal(false)}
       >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { marginTop: insets.top + 20 }]}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <View>
                 <Text style={styles.modalTitle}>Delivery Address</Text>
@@ -660,11 +724,63 @@ const CartView: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <KeyboardSafeScrollView
+            <ScrollView
+              style={{ flex: 1 }}
               contentContainerStyle={styles.addressForm}
               showsVerticalScrollIndicator={false}
-              extraScrollHeight={180}
+              keyboardShouldPersistTaps="handled"
             >
+              {/* Optional Quick-Select Saved Address */}
+              {user?.addresses && user.addresses.length > 0 && (
+                <View style={styles.savedAddressesSection}>
+                  <Text style={styles.sectionHeaderTitle}>Saved Addresses</Text>
+                  {user.addresses.map((savedAddr: any, idx: number) => {
+                    const isSelected =
+                      (addrStreet && savedAddr.address === addrStreet) ||
+                      (currentAddress?.address === savedAddr.address);
+                    return (
+                      <TouchableOpacity
+                        key={savedAddr.id || `saved_${idx}`}
+                        style={[
+                          styles.savedAddressItem,
+                          isSelected && styles.savedAddressItemActive,
+                        ]}
+                        activeOpacity={0.75}
+                        onPress={() => {
+                          setAddrName(savedAddr.name || user?.name || '');
+                          setAddrPhone(savedAddr.phone || user?.phone || '');
+                          setAddrStreet(savedAddr.address || savedAddr.street_address || '');
+                          setAddrCity(savedAddr.city || '');
+                          setAddrState(savedAddr.state || 'Andhra Pradesh');
+                          setAddrZip(savedAddr.zipCode || savedAddr.pincode || '');
+                        }}
+                      >
+                        <View style={styles.savedAddrHeader}>
+                          <Text style={styles.savedAddrName}>{savedAddr.name || 'Recipient'}</Text>
+                          {isSelected && (
+                            <View style={styles.selectedBadge}>
+                              <Feather name="check" size={11} color="#FFFFFF" />
+                              <Text style={styles.selectedBadgeText}>SELECTED</Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.savedAddrDetails} numberOfLines={2}>
+                          {savedAddr.address || savedAddr.street_address}, {savedAddr.city}, {savedAddr.state} - {savedAddr.zipCode || savedAddr.pincode}
+                        </Text>
+                        {savedAddr.phone ? (
+                          <Text style={styles.savedAddrPhone}>Phone: {savedAddr.phone}</Text>
+                        ) : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                  <View style={styles.dividerRow}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>OR EDIT / ENTER BELOW</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+                </View>
+              )}
+
               <Text style={styles.formLabel}>Recipient Name</Text>
               <TextInput
                 style={styles.formInput}
@@ -734,9 +850,9 @@ const CartView: React.FC = () => {
               >
                 <Text style={styles.saveAddressBtnText}>SAVE & DELIVER HERE</Text>
               </TouchableOpacity>
-            </KeyboardSafeScrollView>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* 9. Modern Luxury Confirm Order Modal */}
@@ -799,7 +915,7 @@ const CartView: React.FC = () => {
               </View>
               <View style={[styles.confirmSummaryRow, { borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 10, marginTop: 4 }]}>
                 <Text style={styles.confirmTotalLabel}>Total to Pay</Text>
-                <Text style={styles.confirmTotalAmount}>₹{finalTotal.toLocaleString()}</Text>
+                <Text style={styles.confirmTotalAmount}>₹{formatCurrency(finalTotal)}</Text>
               </View>
             </View>
 
@@ -1093,6 +1209,21 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: tokens.colors.textMuted,
     marginBottom: 6,
+  },
+  returnGiftCartBadge: {
+    backgroundColor: '#FEF3C7',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
+    marginBottom: 6,
+    borderWidth: 0.5,
+    borderColor: '#FDE68A',
+  },
+  returnGiftCartBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#92400E',
   },
   priceRow: {
     flexDirection: 'row',
@@ -1439,15 +1570,17 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
     justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: tokens.colors.surface,
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    maxHeight: '85%',
+    height: '85%',
+    maxHeight: '90%',
     paddingBottom: 24,
+    overflow: 'hidden',
     ...tokens.shadows.card,
   },
   modalHeader: {
@@ -1480,7 +1613,81 @@ const styles = StyleSheet.create({
   },
   addressForm: {
     padding: tokens.spacing.lg,
-    paddingBottom: 32,
+    paddingBottom: 40,
+  },
+  savedAddressesSection: {
+    marginBottom: 16,
+  },
+  sectionHeaderTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: tokens.colors.primary,
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  savedAddressItem: {
+    backgroundColor: tokens.colors.surfaceSecondary,
+    borderRadius: tokens.radius.input,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: tokens.colors.border,
+  },
+  savedAddressItemActive: {
+    borderColor: tokens.colors.primary,
+    backgroundColor: '#F8FAFC',
+  },
+  savedAddrHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  savedAddrName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: tokens.colors.textPrimary,
+  },
+  selectedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: tokens.colors.primary,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+    gap: 4,
+  },
+  selectedBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  savedAddrDetails: {
+    fontSize: 12,
+    color: tokens.colors.textSecondary,
+    lineHeight: 16,
+  },
+  savedAddrPhone: {
+    fontSize: 11,
+    color: tokens.colors.textSecondary,
+    marginTop: 2,
+  },
+  dividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 12,
+    gap: 8,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: tokens.colors.border,
+  },
+  dividerText: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
   },
   formLabel: {
     fontSize: 12,

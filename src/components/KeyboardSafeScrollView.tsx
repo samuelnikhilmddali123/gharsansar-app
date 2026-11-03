@@ -91,6 +91,7 @@ export const KeyboardSafeScrollView = forwardRef<any, KeyboardSafeScrollViewProp
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
           {...scrollViewProps}
+          style={[{ flex: 1 }, (scrollViewProps as any).style]}
           contentContainerStyle={mergedContentContainerStyle}
         >
           {children}
@@ -111,6 +112,7 @@ export const KeyboardSafeScrollView = forwardRef<any, KeyboardSafeScrollViewProp
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
           {...scrollViewProps}
+          style={[{ flex: 1 }, (scrollViewProps as any).style]}
           contentContainerStyle={mergedContentContainerStyle}
         >
           {children}

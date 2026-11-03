@@ -28,10 +28,25 @@ export default function ExploreView() {
     setSelectedCategory,
     setSelectedProductId,
     getCategoryDiscount,
+    cart,
+    favorites,
+    setActiveTab,
   } = useMobileApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const scrollRef = React.useRef<any>(null);
+
+  const cartCount = useMemo(() => cart.reduce((sum, item) => sum + item.quantity, 0), [cart]);
+
+  const handleCartPress = () => {
+    setSelectedProductId(null);
+    setActiveTab('cart');
+  };
+
+  const handleWishlistPress = () => {
+    setSelectedProductId(null);
+    setActiveTab('wishlist');
+  };
 
   const activeCatDiscount = useMemo(() => {
     if (selectedCategory === 'All') return undefined;
@@ -83,10 +98,10 @@ export default function ExploreView() {
     return result;
   }, [products, selectedCategory, searchQuery]);
 
-  const [visibleLimit, setVisibleLimit] = useState(20);
+  const [visibleLimit, setVisibleLimit] = useState(12);
 
   React.useEffect(() => {
-    setVisibleLimit(20);
+    setVisibleLimit(12);
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [selectedCategory, searchQuery]);
 
@@ -106,11 +121,47 @@ export default function ExploreView() {
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top']}>
-      {/* 1. DISCOVERY HEADER */}
+      {/* 1. DISCOVERY HEADER WITH CART & WISHLIST BUTTONS */}
       <View style={styles.header}>
-        <Text style={styles.brandSubtitle}>GHAR SANSAR DISCOVERY</Text>
-        <Text style={styles.headerTitle}>Explore Products</Text>
-        <Text style={styles.headerDescription}>Discover curated pieces you will love</Text>
+        <View style={styles.headerTextCol}>
+          <Text style={styles.brandSubtitle}>GHAR SANSAR DISCOVERY</Text>
+          <Text style={styles.headerTitle}>Explore Products</Text>
+          <Text style={styles.headerDescription}>Discover curated pieces you will love</Text>
+        </View>
+
+        <View style={styles.headerActionsRow}>
+          {/* Cart Button */}
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            activeOpacity={0.7}
+            onPress={handleCartPress}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Feather name="shopping-bag" size={19} color={colors.textPrimary} />
+            {cartCount > 0 && (
+              <View style={styles.cartBadge}>
+                <Text style={styles.cartBadgeText}>
+                  {cartCount > 99 ? '99+' : cartCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* Wishlist Button */}
+          <TouchableOpacity
+            style={styles.headerActionBtn}
+            activeOpacity={0.7}
+            onPress={handleWishlistPress}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Feather
+              name="heart"
+              size={19}
+              color={favorites.length > 0 ? colors.accentRed : colors.textPrimary}
+            />
+            {favorites.length > 0 && <View style={styles.miniDotBadge} />}
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* 2. SEARCH BAR */}
@@ -236,7 +287,7 @@ export default function ExploreView() {
                 Category Promotion Active
               </Text>
               <Text style={styles.catDiscountSubtitle}>
-                Flat {activeCatDiscount.discountPercentage}% off strike price on all {selectedCategory} products!
+                Special {activeCatDiscount.discountPercentage}% off on all {selectedCategory} products!
               </Text>
             </View>
           </View>
@@ -312,7 +363,56 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: spacing.pageHorizontal,
     paddingTop: 8,
-    paddingBottom: 4,
+    paddingBottom: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  headerTextCol: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  headerActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerActionBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1,
+    borderColor: colors.surfaceTertiary,
+    position: 'relative',
+  },
+  cartBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: colors.accentRed,
+    minWidth: 17,
+    height: 17,
+    borderRadius: 8.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  cartBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  miniDotBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: colors.accentRed,
   },
   brandSubtitle: {
     fontSize: 10,

@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { Feather, FontAwesome, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useMobileApp, Product } from '../context/MobileAppContext';
+import { useMobileApp, Product, formatCurrency } from '../context/MobileAppContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PremiumImage } from '../components/PremiumImage';
 import ProductCard from '../components/ProductCard';
@@ -111,6 +111,7 @@ const ProductDetailView: React.FC = () => {
     products,
     paginatedProducts,
     flashSale,
+    returnGifts,
     selectedProductId,
     setSelectedProductId,
     cart,
@@ -159,9 +160,10 @@ const ProductDetailView: React.FC = () => {
     return (
       products.find((p) => p.id === selectedProductId) ||
       paginatedProducts.find((p) => p.id === selectedProductId) ||
-      (flashSale && flashSale.products.find((p) => p.id === selectedProductId))
+      (flashSale && flashSale.products.find((p) => p.id === selectedProductId)) ||
+      returnGifts.find((p) => p.id === selectedProductId)
     );
-  }, [products, paginatedProducts, flashSale, selectedProductId]);
+  }, [products, paginatedProducts, flashSale, returnGifts, selectedProductId]);
 
   // Fetch reviews from backend when product changes
   useEffect(() => {
@@ -212,19 +214,33 @@ const ProductDetailView: React.FC = () => {
   const tagline = getProductTagline(product.category);
   const specifications = getProductSpecs(product);
 
-  const strike = product.strikePrice || product.actPrice || product.price;
-  const sellingPrice = product.actualPrice || product.price;
-  const savingsValue = Math.max(0, strike - sellingPrice);
-  const calculatedPercent = strike > sellingPrice ? Math.round((savingsValue / strike) * 100) : 0;
+  const finalPrice = product.finalPrice !== undefined ? product.finalPrice : (product.price !== undefined ? product.price : product.actualPrice);
+  const strike = product.strikePrice || product.actPrice || 0;
+  const hasSavings = strike > finalPrice;
+  const savingsValue = Math.max(0, strike - finalPrice);
+  const calculatedPercent = strike > finalPrice && strike > 0 ? Math.round((savingsValue / strike) * 100) : 0;
   const hasCategoryPromo = Boolean(product.hasCategoryDiscount && product.categoryDiscountPercentage > 0);
-  const discountPercent = hasCategoryPromo
-    ? product.categoryDiscountPercentage
-    : (product.discountPercentage || calculatedPercent);
+  const discountBadgeText = hasCategoryPromo
+    ? `${product.categoryDiscountPercentage}% OFF`
+    : (hasSavings && strike > 0 ? `${calculatedPercent}% OFF` : null);
 
-  // Related products from the same category
-  const relatedProducts = products
-    .filter((p) => p.category === product.category && p.id !== product.id)
-    .slice(0, 6);
+  const isReturnGift = Boolean(
+    product.isReturnGift ||
+    product.category === 'Return Gifts' ||
+    product.category === 'return_gifts' ||
+    String(product.id).startsWith('rg-')
+  );
+
+  // Related products from the same category or return gifts collection
+  const relatedProducts = useMemo(() => {
+    if (!product) return [];
+    if (isReturnGift) {
+      return returnGifts.filter((p) => p.id !== product.id).slice(0, 6);
+    }
+    return products
+      .filter((p) => p.category === product.category && p.id !== product.id)
+      .slice(0, 6);
+  }, [product, isReturnGift, returnGifts, products]);
 
   // Cart quantity check for current product
   const cartItem = cart.find(
@@ -236,7 +252,7 @@ const ProductDetailView: React.FC = () => {
   const handleShare = async () => {
     try {
       await Share.share({
-        message: `Check out ${product.title} on Ghar Sansar: ₹${product.price.toLocaleString()}! https://gharsansar.website/products/${product.id}`,
+        message: `Check out ${product.title} on Ghar Sansar: ₹${formatCurrency(finalPrice)}! https://gharsansar.website/products/${product.id}`,
       });
     } catch (e) {
       console.log('Share error', e);
@@ -252,7 +268,7 @@ const ProductDetailView: React.FC = () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    addToCart(product);
+    addToCart(product, isReturnGift ? 50 : 1);
   };
 
   const handleIncrement = () => {
@@ -276,7 +292,11 @@ const ProductDetailView: React.FC = () => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     } catch {}
-    updateCartQuantity(product.id, -1);
+    if (isReturnGift && quantity <= 50) {
+      updateCartQuantity(product.id, -quantity);
+    } else {
+      updateCartQuantity(product.id, -1);
+    }
   };
 
   const handleCheckPincode = async () => {
@@ -449,13 +469,17 @@ const ProductDetailView: React.FC = () => {
               product={product}
               contentFit="contain"
             />
-            {(discountPercent > 0 || hasCategoryPromo) && (
+            {isReturnGift ? (
+              <View style={styles.bulkOrderBadge}>
+                <Text style={styles.bulkOrderBadgeText}>Bulk Gifting • Min 50 pcs</Text>
+              </View>
+            ) : discountBadgeText ? (
               <View style={[styles.galleryDiscountBadge, hasCategoryPromo && styles.categoryDiscountBadge]}>
                 <Text style={styles.galleryDiscountText}>
-                  {hasCategoryPromo ? `${product.categoryDiscountPercentage}% OFF` : `${discountPercent}% OFF`}
+                  {discountBadgeText}
                 </Text>
               </View>
-            )}
+            ) : null}
           </TouchableOpacity>
 
           {/* Small thumbnail carousel if multiple images exist */}
@@ -541,26 +565,26 @@ const ProductDetailView: React.FC = () => {
           </TouchableOpacity>
         </View>
 
-        {/* 5. PRICE SECTION (Clean, Controlled Two-Price Architecture) */}
+        {/* 5. PRICE SECTION (Clean 3-Price Architecture) */}
         <View style={styles.priceSection}>
           <View style={styles.priceTopRow}>
-            {(discountPercent > 0 || hasCategoryPromo) && (
+            {discountBadgeText && (
               <View style={[styles.priceDiscountPill, hasCategoryPromo && styles.categoryDiscountBadge]}>
                 <Text style={styles.priceDiscountPillText}>
-                  {hasCategoryPromo ? `${product.categoryDiscountPercentage}% CATEGORY OFFER` : `${discountPercent}% OFF`}
+                  {discountBadgeText}
                 </Text>
               </View>
             )}
-            <Text style={styles.heroPrice}>₹{sellingPrice.toLocaleString()}</Text>
-            {strike > sellingPrice && (
-              <Text style={styles.heroMrp}>MRP ₹{strike.toLocaleString()}</Text>
+            <Text style={styles.heroPrice}>₹{formatCurrency(finalPrice)}</Text>
+            {hasSavings && (
+              <Text style={styles.heroMrp}>MRP ₹{formatCurrency(strike)}</Text>
             )}
           </View>
 
           <View style={styles.savingsRow}>
             {savingsValue > 0 && (
               <Text style={styles.savingsHighlight}>
-                You Save ₹{savingsValue.toLocaleString()} ({strike > 0 ? Math.round((savingsValue / strike) * 100) : 0}% off MRP)
+                You Save ₹{formatCurrency(savingsValue)} ({strike > 0 ? Math.round((savingsValue / strike) * 100) : 0}% off MRP)
               </Text>
             )}
             <Text style={styles.taxesMuted}>Inclusive of all taxes</Text>
@@ -570,8 +594,24 @@ const ProductDetailView: React.FC = () => {
             <View style={styles.categoryPromoCallout}>
               <Feather name="tag" size={13} color={tokens.colors.savings} />
               <Text style={styles.categoryPromoCalloutText}>
-                Promotional Category Discount: Flat {product.categoryDiscountPercentage}% off MRP is active!
+                Category Offer: Flat {product.categoryDiscountPercentage}% discount applied!
               </Text>
+            </View>
+          )}
+
+          {isReturnGift && (
+            <View style={styles.bulkPricingCallout}>
+              <View style={styles.bulkPricingIconBox}>
+                <Feather name="gift" size={16} color="#92400E" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.bulkPricingCalloutTitle}>
+                  Bulk Minimum Order: 50 Pieces
+                </Text>
+                <Text style={styles.bulkPricingCalloutSub}>
+                  Wholesale unit price is ₹{formatCurrency(finalPrice)}/pc (₹{formatCurrency(finalPrice * 50)} total for starting order of 50 pcs).
+                </Text>
+              </View>
             </View>
           )}
         </View>
@@ -696,10 +736,17 @@ const ProductDetailView: React.FC = () => {
       {/* 10. FIXED BOTTOM PURCHASE BAR (Safe-area aware) */}
       <View style={styles.bottomPurchaseBar}>
         <View style={styles.purchasePriceCol}>
-          <Text style={styles.purchaseCurrentPrice}>₹{sellingPrice.toLocaleString()}</Text>
-          {strike > sellingPrice && (
-            <Text style={styles.purchaseMrp}>MRP ₹{strike.toLocaleString()}</Text>
-          )}
+          <Text style={styles.purchaseCurrentPrice}>
+            ₹{formatCurrency(finalPrice)}
+            {isReturnGift && <Text style={{ fontSize: 12, fontWeight: '500', color: tokens.colors.textMuted }}> / pc</Text>}
+          </Text>
+          {isReturnGift ? (
+            <Text style={styles.purchaseMrp}>
+              ₹{formatCurrency(finalPrice * (quantity > 0 ? quantity : 50))} for {quantity > 0 ? quantity : 50} pcs
+            </Text>
+          ) : hasSavings ? (
+            <Text style={styles.purchaseMrp}>MRP ₹{formatCurrency(strike)}</Text>
+          ) : null}
         </View>
 
         <View style={styles.purchaseButtonsRow}>
@@ -730,7 +777,9 @@ const ProductDetailView: React.FC = () => {
               onPress={handleAddToCart}
             >
               <Feather name="shopping-bag" size={16} color="#FFFFFF" />
-              <Text style={styles.addToCartText}>Add to Bag</Text>
+              <Text style={styles.addToCartText}>
+                {isReturnGift ? 'Add to Bag (Min 50 pcs)' : 'Add to Bag'}
+              </Text>
             </TouchableOpacity>
           )}
         </View>
@@ -931,6 +980,22 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: tokens.radius.pill,
   },
+  bulkOrderBadge: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    backgroundColor: '#92400E',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: tokens.radius.pill,
+    zIndex: 2,
+  },
+  bulkOrderBadgeText: {
+    color: '#FEF3C7',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
   galleryDiscountText: {
     color: '#FFFFFF',
     fontSize: 11,
@@ -1101,6 +1166,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: tokens.colors.savings,
+  },
+  bulkPricingCallout: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  bulkPricingIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#FDE68A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bulkPricingCalloutTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#92400E',
+    marginBottom: 2,
+  },
+  bulkPricingCalloutSub: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#78350F',
   },
   priceDiscountPillText: {
     color: '#FFFFFF',

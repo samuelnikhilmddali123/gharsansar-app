@@ -302,7 +302,7 @@ export default function HomeView() {
                         {mapCategoryLabel(disc.category)}
                       </Text>
                       <Text style={styles.promoSubText}>
-                        Flat discount on Strike Price
+                        Special category discount
                       </Text>
                     </View>
                     <Feather name="chevron-right" size={15} color={colors.accentGreen} />
@@ -355,8 +355,8 @@ export default function HomeView() {
             </View>
           )}
 
-          {/* 6. CATEGORY-WISE PRODUCT SECTIONS (Sonu 5 items, Cello 5 items, etc. with See all) */}
-          {categorySections.map((sec) => (
+          {/* 6. CATEGORY-WISE PRODUCT SECTIONS (Top 4 priority categories for high-speed rendering) */}
+          {categorySections.slice(0, 4).map((sec) => (
             <View key={sec.category} style={styles.sectionBlock}>
               <SectionHeader
                 title={sec.category}

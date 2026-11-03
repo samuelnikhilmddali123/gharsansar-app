@@ -7,6 +7,7 @@ import { useMobileApp } from '../context/MobileAppContext';
 
 interface AppHeaderProps {
   onWishlistPress?: () => void;
+  onReturnGiftsPress?: () => void;
   onNotificationsPress?: () => void;
   onAccountPress?: () => void;
   onCartPress?: () => void;
@@ -14,6 +15,7 @@ interface AppHeaderProps {
 
 export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
   onWishlistPress,
+  onReturnGiftsPress,
   onNotificationsPress,
   onAccountPress,
   onCartPress,
@@ -32,6 +34,15 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
       onCartPress();
     } else {
       setActiveTab('cart');
+    }
+  };
+
+  const handleReturnGifts = () => {
+    setSelectedProductId(null);
+    if (onReturnGiftsPress) {
+      onReturnGiftsPress();
+    } else {
+      setActiveTab('returnGifts');
     }
   };
 
@@ -121,10 +132,12 @@ export const AppHeader: React.FC<AppHeaderProps> = React.memo(({
           activeOpacity={0.7}
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
-          <Feather name="heart" size={20} color={colors.textPrimary} />
-          {favorites.length > 0 && (
-            <View style={styles.miniDotBadge} />
-          )}
+          <Feather
+            name="heart"
+            size={20}
+            color={favorites.length > 0 ? colors.accentRed : colors.textPrimary}
+          />
+          {favorites.length > 0 && <View style={styles.miniDotBadge} />}
         </TouchableOpacity>
 
         {/* Account Button */}
