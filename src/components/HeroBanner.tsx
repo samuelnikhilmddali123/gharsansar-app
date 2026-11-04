@@ -108,6 +108,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = React.memo(({ banners, onSh
                 source={imageSource}
                 style={StyleSheet.absoluteFill}
                 contentFit="cover"
+                cachePolicy="none"
                 transition={200}
               />
             </TouchableOpacity>

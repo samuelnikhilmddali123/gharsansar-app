@@ -4,6 +4,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image as ExpoImage } from 'expo-image';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -367,15 +368,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     'Wall Clocks'
   ];
 
-  // React Query Equivalent Cache Engine with Timeout Protection
-  const cacheRegistry = React.useRef<{ [key: string]: { data: any; timestamp: number } }>({});
-  const CACHE_TTL = 5 * 60 * 1000; // 5 minutes TTL
-
-  const fetchWithCache = async (url: string, forceRefresh = false, timeoutMs = 8000) => {
-    const now = Date.now();
-    if (!forceRefresh && cacheRegistry.current[url] && now - cacheRegistry.current[url].timestamp < CACHE_TTL) {
-      return cacheRegistry.current[url].data;
-    }
+  // Always fetch live from API - No caching
+  const fetchWithCache = async (url: string, _forceRefresh = false, timeoutMs = 8000) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -383,7 +377,6 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP error ${res.status}`);
       const data = await res.json();
-      cacheRegistry.current[url] = { data, timestamp: now };
       return data;
     } catch (err: any) {
       clearTimeout(timer);
@@ -517,16 +510,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const rawList = Array.isArray(data) ? data : (data?.products || data?.data || []);
       const mapped = rawList.map((p: any) => mapBackendProduct({ ...p, isReturnGift: true, category: 'return_gifts' }));
       setReturnGifts(mapped);
-      AsyncStorage.setItem('@cached_return_gifts', JSON.stringify(mapped)).catch(() => {});
     } catch (err) {
       console.warn('Failed to fetch return gifts from API:', err);
-      try {
-        const cached = await AsyncStorage.getItem('@cached_return_gifts');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) setReturnGifts(parsed);
-        }
-      } catch (cErr) {}
+      setReturnGifts([]);
     } finally {
       setReturnGiftsLoading(false);
     }
@@ -542,16 +528,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         image: b.image ? normalizeImageUrl(b.image) : b.image
       }));
       setBanners(mappedBanners);
-      AsyncStorage.setItem('@cached_banners', JSON.stringify(mappedBanners)).catch(() => { });
     } catch (err) {
       console.warn('Failed to fetch banners from API:', err);
-      try {
-        const cached = await AsyncStorage.getItem('@cached_banners');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) setBanners(parsed);
-        }
-      } catch (cErr) { }
+      setBanners([]);
     } finally {
       setBannersLoading(false);
     }
@@ -616,31 +595,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         });
 
         setCategories(mapped);
-        AsyncStorage.setItem('@cached_categories', JSON.stringify(mapped)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch categories from API:', err);
-      try {
-        const cached = await AsyncStorage.getItem('@cached_categories');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const updated = parsed.map((c: any) => {
-              if (c.name?.toLowerCase().includes('sonu') || c.name?.toLowerCase().includes('steel')) {
-                return { ...c, image: normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp') };
-              }
-              if (c.name?.toLowerCase() === 'cello') {
-                return { ...c, image: normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp') };
-              }
-              if (c.name?.toLowerCase().includes('aquarium')) {
-                return { ...c, image: normalizeImageUrl('/products/aquarium_and_accesories/optimum_fish_food_500g_mini_pellets_for_aquarium_fish_high_protein_floating_feed_for_guppy_molly_tetra_betta_tropical_fish_daily_nutrition_for_growth_color_enhancement.webp') };
-              }
-              return c;
-            });
-            setCategories(updated);
-          }
-        }
-      } catch (cErr) { }
+      setCategories([]);
     } finally {
       setCategoriesLoading(false);
     }
@@ -657,14 +615,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           products: (data.products || []).map(mapBackendProduct)
         };
         setFlashSale(mappedFlashSale);
-        AsyncStorage.setItem('@cached_flashsale', JSON.stringify(mappedFlashSale)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch flashsale from API:', err);
-      try {
-        const cached = await AsyncStorage.getItem('@cached_flashsale');
-        if (cached) setFlashSale(JSON.parse(cached));
-      } catch (cErr) { }
+      setFlashSale(null);
     } finally {
       setFlashSaleLoading(false);
     }
@@ -677,17 +631,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       const data = await fetchWithCache(API_ENDPOINTS.ACTIVE_DISCOUNTS);
       if (data && data.success && Array.isArray(data.data)) {
         setActiveDiscounts(data.data);
-        AsyncStorage.setItem('@cached_active_discounts', JSON.stringify(data.data)).catch(() => { });
       }
     } catch (err) {
       console.warn('Failed to fetch active discounts:', err);
-      try {
-        const cached = await AsyncStorage.getItem('@cached_active_discounts');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed)) setActiveDiscounts(parsed);
-        }
-      } catch (cErr) { }
+      setActiveDiscounts([]);
     } finally {
       setDiscountsLoading(false);
     }
@@ -729,12 +676,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
         if (flatList.length > 0) {
           setProducts(flatList);
-          AsyncStorage.setItem('@cached_products', JSON.stringify(flatList)).catch(() => { });
           return;
         }
       }
 
-      // Tier 2 Fallback: Fetch directly from /api/products/paginated
+      // Fallback: Fetch directly from /api/products/paginated
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 8000);
       try {
@@ -745,7 +691,6 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           if (pageData && Array.isArray(pageData.products) && pageData.products.length > 0) {
             const mapped = pageData.products.map(mapBackendProduct);
             setProducts(mapped);
-            AsyncStorage.setItem('@cached_products', JSON.stringify(mapped)).catch(() => { });
             return;
           }
         }
@@ -754,17 +699,6 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
     } catch (err) {
       console.warn('Failed to fetch product list from backend API:', err);
-      // Tier 3 Fallback: Load previously cached catalog from storage
-      try {
-        const cached = await AsyncStorage.getItem('@cached_products');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProducts(parsed);
-            return;
-          }
-        }
-      } catch (cacheErr) { }
       setProducts([]);
     } finally {
       setProductsLoading(false);
@@ -941,10 +875,6 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         const data = await res.json();
         if (data.success) {
           setNotifications(data.notifications);
-          // Invalidate cache
-          if (cacheRegistry.current[`${BACKEND_URL}/api/mobile/notifications`]) {
-            delete cacheRegistry.current[`${BACKEND_URL}/api/mobile/notifications`];
-          }
         }
       }
     } catch (err) {
@@ -961,9 +891,6 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         const data = await res.json();
         if (data.success) {
           setNotifications([]);
-          if (cacheRegistry.current[`${BACKEND_URL}/api/mobile/notifications`]) {
-            delete cacheRegistry.current[`${BACKEND_URL}/api/mobile/notifications`];
-          }
         }
       }
     } catch (err) {
@@ -1159,6 +1086,20 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     };
 
     const initializeData = async () => {
+      // Clean up any previously stored offline cache
+      try {
+        await AsyncStorage.multiRemove([
+          '@cached_products',
+          '@cached_return_gifts',
+          '@cached_banners',
+          '@cached_categories',
+          '@cached_flashsale',
+          '@cached_active_discounts'
+        ]);
+        await ExpoImage.clearDiskCache();
+        await ExpoImage.clearMemoryCache();
+      } catch (e) { }
+
       await Promise.all([
         fetchActiveDiscounts(),
         fetchAllProducts(),

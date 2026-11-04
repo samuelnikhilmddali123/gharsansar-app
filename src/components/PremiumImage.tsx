@@ -131,7 +131,7 @@ export const PremiumImage: React.FC<PremiumImageProps> = React.memo(({
         }}
         style={StyleSheet.absoluteFill}
         contentFit={contentFit}
-        cachePolicy="disk"
+        cachePolicy="none"
         priority="high"
         transition={150}
         onError={handleError}

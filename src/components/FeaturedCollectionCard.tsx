@@ -44,6 +44,7 @@ export const FeaturedCollectionCard: React.FC<FeaturedCollectionCardProps> = Rea
           source={{ uri: bannerImg }}
           style={styles.image}
           contentFit="contain"
+          cachePolicy="none"
           transition={200}
         />
       </View>
