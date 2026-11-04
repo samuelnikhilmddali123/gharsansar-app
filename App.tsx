@@ -14,6 +14,8 @@ import FavoritesView from './src/pages/FavoritesView';
 import ReturnGiftsView from './src/pages/ReturnGiftsView';
 import ProfileView from './src/pages/ProfileView';
 import ProductDetailView from './src/pages/ProductDetailView';
+import { NoInternetView } from './src/components/NoInternetView';
+import { OfflineBanner } from './src/components/OfflineBanner';
 
 // ----------------------------------------------------------------------
 // LUXURY STARTUP SPLASH SCREEN (1.2 Seconds)
@@ -61,12 +63,30 @@ const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) =>
 // MAIN NAVIGATION & SCREEN ROUTER
 // ----------------------------------------------------------------------
 const AppContent: React.FC = () => {
-  const { activeTab, setActiveTab, selectedProductId } = useMobileApp();
+  const {
+    activeTab,
+    setActiveTab,
+    selectedProductId,
+    isOffline,
+    refreshAllData,
+    products,
+    productsLoading,
+  } = useMobileApp();
   const [isSplashing, setIsSplashing] = useState(true);
+
+  // If offline and no products are loaded: display full-screen luxury NoInternetView
+  if (isOffline && products.length === 0 && !productsLoading && !isSplashing) {
+    return <NoInternetView onRetry={refreshAllData} />;
+  }
 
   return (
     <View style={styles.container}>
       <StatusBar style="dark" />
+
+      {/* Floating Offline Banner when disconnected while browsing */}
+      {isOffline && !isSplashing && (
+        <OfflineBanner onRetry={refreshAllData} />
+      )}
       
       {/* Active Screen View */}
       <View style={styles.screenWrapper}>

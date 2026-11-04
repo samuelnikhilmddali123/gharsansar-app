@@ -5,6 +5,7 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
+import * as Network from 'expo-network';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -214,6 +215,12 @@ interface MobileAppContextType {
   // Interactive Auth Modal Control
   authModalVisible: boolean;
   setAuthModalVisible: (visible: boolean) => void;
+
+  // Offline & Network Connectivity State
+  isOffline: boolean;
+  setIsOffline: (val: boolean) => void;
+  checkNetworkConnectivity: () => Promise<boolean>;
+  refreshAllData: () => Promise<any>;
 }
 
 const MobileAppContext = createContext<MobileAppContextType | undefined>(undefined);
@@ -368,6 +375,20 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     'Wall Clocks'
   ];
 
+  // Offline & Network Connectivity State
+  const [isOffline, setIsOffline] = useState(false);
+
+  const checkNetworkConnectivity = async (): Promise<boolean> => {
+    try {
+      const state = await Network.getNetworkStateAsync();
+      const connected = Boolean(state.isConnected && state.isInternetReachable !== false);
+      setIsOffline(!connected);
+      return connected;
+    } catch {
+      return true;
+    }
+  };
+
   // Always fetch live from API - No caching
   const fetchWithCache = async (url: string, _forceRefresh = false, timeoutMs = 8000) => {
     const controller = new AbortController();
@@ -380,6 +401,13 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       return data;
     } catch (err: any) {
       clearTimeout(timer);
+      Network.getNetworkStateAsync()
+        .then(state => {
+          if (!state.isConnected || state.isInternetReachable === false) {
+            setIsOffline(true);
+          }
+        })
+        .catch(() => {});
       throw err;
     }
   };
@@ -730,6 +758,48 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
     } finally {
       setPaginatedLoading(false);
+    }
+  };
+
+  const refreshAllData = async () => {
+    setProductsLoading(true);
+    setCategoriesLoading(true);
+    setBannersLoading(true);
+    setReturnGiftsLoading(true);
+
+    const isConnected = await checkNetworkConnectivity();
+    if (!isConnected) {
+      setProductsLoading(false);
+      setCategoriesLoading(false);
+      setBannersLoading(false);
+      setReturnGiftsLoading(false);
+      throw new Error('No internet connection');
+    }
+
+    try {
+      const results = await Promise.allSettled([
+        fetchActiveDiscounts(),
+        fetchAllProducts(),
+        fetchReturnGifts(),
+        fetchBanners(),
+        fetchCategories(),
+        fetchFlashSale(),
+        fetchWishlist(),
+        fetchNotifications(),
+      ]);
+      setIsOffline(false);
+      return results;
+    } catch (e) {
+      const recheck = await checkNetworkConnectivity();
+      if (!recheck) {
+        setIsOffline(true);
+      }
+      throw e;
+    } finally {
+      setProductsLoading(false);
+      setCategoriesLoading(false);
+      setBannersLoading(false);
+      setReturnGiftsLoading(false);
     }
   };
 
@@ -1100,6 +1170,17 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         await ExpoImage.clearMemoryCache();
       } catch (e) { }
 
+      const isConnected = await checkNetworkConnectivity();
+      if (!isConnected) {
+        setIsOffline(true);
+        setProductsLoading(false);
+        setCategoriesLoading(false);
+        setBannersLoading(false);
+        setReturnGiftsLoading(false);
+        setDiscountsLoading(false);
+        return;
+      }
+
       await Promise.all([
         fetchActiveDiscounts(),
         fetchAllProducts(),
@@ -1116,6 +1197,20 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     initializeData();
     registerForPushNotificationsAsync();
 
+    // Add network state listener
+    let networkSubscription: any = null;
+    try {
+      networkSubscription = Network.addNetworkStateListener(state => {
+        const connected = Boolean(state.isConnected && state.isInternetReachable !== false);
+        setIsOffline(!connected);
+        if (connected) {
+          refreshAllData().catch(() => {});
+        }
+      });
+    } catch (e) {
+      console.warn('Network state listener unavailable:', e);
+    }
+
     // Add foreground notification listener
     let notificationListener: any = null;
     try {
@@ -1127,6 +1222,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
 
     return () => {
+      if (networkSubscription?.remove) {
+        networkSubscription.remove();
+      }
       if (notificationListener?.remove) {
         notificationListener.remove();
       }
@@ -2158,7 +2256,13 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
         // Auth Modal Control
         authModalVisible,
-        setAuthModalVisible
+        setAuthModalVisible,
+
+        // Offline & Network
+        isOffline,
+        setIsOffline,
+        checkNetworkConnectivity,
+        refreshAllData
       }}
     >
       {children}

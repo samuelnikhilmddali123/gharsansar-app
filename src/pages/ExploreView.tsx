@@ -31,6 +31,8 @@ export default function ExploreView() {
     cart,
     favorites,
     setActiveTab,
+    isOffline,
+    refreshAllData,
   } = useMobileApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -308,20 +310,39 @@ export default function ExploreView() {
         />
 
         {displayedProducts.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Feather name="package" size={40} color={colors.textMuted} />
-            <Text style={styles.emptyTitle}>No products found</Text>
-            <Text style={styles.emptySubtitle}>Try choosing another category or clearing filters.</Text>
-            <TouchableOpacity
-              onPress={() => {
-                setSelectedCategory('All');
-                setSearchQuery('');
-              }}
-              style={styles.resetButton}
-            >
-              <Text style={styles.resetButtonText}>View All Products</Text>
-            </TouchableOpacity>
-          </View>
+          isOffline ? (
+            <View style={styles.emptyContainer}>
+              <View style={styles.offlineIconBox}>
+                <Feather name="wifi-off" size={34} color={colors.brandForestGreen} />
+              </View>
+              <Text style={styles.emptyTitle}>You're Offline</Text>
+              <Text style={styles.emptySubtitle}>
+                Please check your internet connection to browse and search products.
+              </Text>
+              <TouchableOpacity
+                onPress={refreshAllData}
+                style={styles.retryButton}
+              >
+                <Feather name="refresh-cw" size={14} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.retryButtonText}>Refresh</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Feather name="package" size={40} color={colors.textMuted} />
+              <Text style={styles.emptyTitle}>No products found</Text>
+              <Text style={styles.emptySubtitle}>Try choosing another category or clearing filters.</Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setSelectedCategory('All');
+                  setSearchQuery('');
+                }}
+                style={styles.resetButton}
+              >
+                <Text style={styles.resetButtonText}>View All Products</Text>
+              </TouchableOpacity>
+            </View>
+          )
         ) : (
           <>
             <View style={styles.productsGrid}>
@@ -598,6 +619,29 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textMuted,
     textAlign: 'center',
+  },
+  offlineIconBox: {
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: 'rgba(3, 28, 3, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    backgroundColor: colors.brandForestGreen,
+    paddingHorizontal: 24,
+    paddingVertical: 11,
+    borderRadius: radius.pill,
+  },
+  retryButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   resetButton: {
     marginTop: 8,

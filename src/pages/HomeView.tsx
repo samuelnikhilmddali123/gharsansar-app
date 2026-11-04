@@ -49,6 +49,8 @@ export default function HomeView() {
     activeDiscounts,
     fetchActiveDiscounts,
     recentlyViewed,
+    isOffline,
+    refreshAllData,
   } = useMobileApp();
 
   const [refreshing, setRefreshing] = useState(false);
@@ -225,10 +227,29 @@ export default function HomeView() {
           </View>
 
           {filteredProducts.length === 0 ? (
-            <View style={styles.emptySearchContainer}>
-              <Feather name="search" size={40} color={colors.textMuted} />
-              <Text style={styles.emptySearchText}>No products found matching "{searchQuery}"</Text>
-            </View>
+            isOffline ? (
+              <View style={styles.emptySearchContainer}>
+                <View style={styles.offlineSearchBadge}>
+                  <Feather name="wifi-off" size={32} color={colors.brandForestGreen} />
+                </View>
+                <Text style={styles.emptySearchText}>You are currently offline</Text>
+                <Text style={styles.emptySearchSubtext}>
+                  Please connect to the internet to search products
+                </Text>
+                <TouchableOpacity
+                  onPress={refreshAllData}
+                  style={styles.offlineSearchRetryBtn}
+                >
+                  <Feather name="refresh-cw" size={14} color="#FFFFFF" style={{ marginRight: 6 }} />
+                  <Text style={styles.offlineSearchRetryText}>Refresh</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.emptySearchContainer}>
+                <Feather name="search" size={40} color={colors.textMuted} />
+                <Text style={styles.emptySearchText}>No products found matching "{searchQuery}"</Text>
+              </View>
+            )
           ) : (
             <FlatList
               data={filteredProducts}
@@ -685,6 +706,35 @@ const styles = StyleSheet.create({
   emptySearchText: {
     ...typography.body,
     color: colors.textMuted,
+  },
+  offlineSearchBadge: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: 'rgba(3, 28, 3, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptySearchSubtext: {
+    fontSize: 13,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    paddingHorizontal: 24,
+  },
+  offlineSearchRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.brandForestGreen,
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    marginTop: 6,
+  },
+  offlineSearchRetryText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   // Modal
   modalContainer: {
