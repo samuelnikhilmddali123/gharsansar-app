@@ -48,6 +48,7 @@ export const CategoryCarousel: React.FC<CategoryCarouselProps> = React.memo(({
             ]}>
               <PremiumImage
                 uri={cat.image || ''}
+                product={{ id: cat.name, title: cat.name, category: cat.name }}
                 style={styles.image}
                 contentFit="contain"
               />

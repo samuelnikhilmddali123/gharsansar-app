@@ -23,7 +23,7 @@ export const FeaturedCollectionCard: React.FC<FeaturedCollectionCardProps> = Rea
   const staticFallbacks: { [key: string]: string } = {
     'Sonu Steel Products': normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp'),
     'Kitchen & Steel': normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp'),
-    'Cello': normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp'),
+    'Cello': normalizeImageUrl('/products/cello/Complete Blue Floral Cello Dinnerware Set.webp'),
     'German Silver & More': 'https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&q=80&w=600',
     'Kondapalli Toys': 'https://images.unsplash.com/photo-1513519245088-0e12902e5a38?auto=format&fit=crop&q=80&w=600',
     'Aquarium & Accessories': normalizeImageUrl('/products/aquarium_and_accesories/optimum_fish_food_500g_mini_pellets_for_aquarium_fish_high_protein_floating_feed_for_guppy_molly_tetra_betta_tropical_fish_daily_nutrition_for_growth_color_enhancement.webp'),

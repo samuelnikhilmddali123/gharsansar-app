@@ -3,6 +3,7 @@ import { StyleSheet, View, Text, Animated, useWindowDimensions } from 'react-nat
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
 import { useAssets } from 'expo-asset';
+import { SPLASH_GIF_BASE64 } from './src/assets/splashGifBase64';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MobileAppProvider, useMobileApp } from './src/context/MobileAppContext';
 import { BottomNavigation } from './src/components/BottomNavigation';
@@ -22,8 +23,12 @@ import { OfflineBanner } from './src/components/OfflineBanner';
 // LUXURY STARTUP SPLASH SCREEN (Animated House Outline GIF on Black)
 // ----------------------------------------------------------------------
 const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) => {
-  const [assets] = useAssets([require('./assets/output-onlinegiftools.gif')]);
+  const { width: windowWidth } = useWindowDimensions();
   const containerOpacity = useRef(new Animated.Value(1)).current;
+
+  // Explicit integer pixel dimensions so native Android image decoder has definite layout bounds
+  const gifWidth = Math.floor(Math.min((windowWidth > 0 ? windowWidth : 360) * 0.88, 360));
+  const gifHeight = Math.floor(gifWidth / (618 / 274));
 
   useEffect(() => {
     // GIF plays for ~1.62 seconds. Keep on screen for ~2.0s so animation finishes completely before fading into app
@@ -40,16 +45,13 @@ const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) =>
     return () => clearTimeout(exitTimer);
   }, []);
 
-  const gifUri = assets?.[0]?.localUri || assets?.[0]?.uri;
-  const gifSource = gifUri ? { uri: gifUri } : require('./assets/output-onlinegiftools.gif');
-
   return (
     <Animated.View style={[styles.splashContainer, { opacity: containerOpacity }]}>
       <StatusBar style="light" />
-      <View style={styles.splashGifWrapper}>
+      <View style={{ width: gifWidth, height: gifHeight, alignItems: 'center', justifyContent: 'center' }}>
         <Image
-          source={gifSource}
-          style={styles.splashGif}
+          source={{ uri: SPLASH_GIF_BASE64 }}
+          style={{ width: gifWidth, height: gifHeight }}
           contentFit="contain"
           autoplay={true}
         />

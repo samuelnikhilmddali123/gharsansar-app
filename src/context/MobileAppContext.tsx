@@ -585,14 +585,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
             catImage = normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp');
           }
 
-          // Override thumbnail for Cello with Cello Designer Crockery Set 31 Pcs Set
+          // Override thumbnail for Cello with verified Cello Dinnerware Set
           if (
             catName === 'Cello' ||
             cat.name === 'Cello' ||
             cat.name?.toLowerCase() === 'cello' ||
             catName.toLowerCase() === 'cello'
           ) {
-            catImage = normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp');
+            catImage = normalizeImageUrl('/products/cello/Complete Blue Floral Cello Dinnerware Set.webp');
           }
 
           // Override thumbnail for Aquarium & Accessories with Optimum Fish Food 500g

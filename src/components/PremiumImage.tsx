@@ -8,7 +8,7 @@ import { BACKEND_URL, normalizeImageUrl } from '../config/api';
 const CATEGORY_FALLBACKS: { [key: string]: string } = {
   'Kitchen & Steel': normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp'),
   'Sonu Steel Products': normalizeImageUrl('/products/sonu_steel_products/sonu_eliza_pot_16cm_1500_ml.webp'),
-  'Cello': normalizeImageUrl('/products/cello_prod/cello_designer_crockery_set_31pcs_set.webp'),
+  'Cello': normalizeImageUrl('/products/cello/Complete Blue Floral Cello Dinnerware Set.webp'),
   'Return Gifts': normalizeImageUrl('/return gifts/premium-gift-1.png'),
   'return_gifts': normalizeImageUrl('/return gifts/premium-gift-1.png'),
   'Garden & Birds': 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?auto=format&fit=crop&q=80&w=400',
