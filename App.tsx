@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, Animated } from 'react-native';
+import { StyleSheet, View, Text, Animated, Dimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -18,42 +18,65 @@ import { NoInternetView } from './src/components/NoInternetView';
 import { OfflineBanner } from './src/components/OfflineBanner';
 
 // ----------------------------------------------------------------------
-// LUXURY STARTUP SPLASH SCREEN (1.2 Seconds)
+// LUXURY STARTUP SPLASH SCREEN (Animated House Outline GIF on Black)
 // ----------------------------------------------------------------------
+const { width: screenWidth } = Dimensions.get('window');
+const SPLASH_GIF_WIDTH = Math.min(screenWidth * 0.88, 360);
+const SPLASH_GIF_HEIGHT = Math.round(SPLASH_GIF_WIDTH / (618 / 274));
+
 const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) => {
-  const scaleAnim = useRef(new Animated.Value(0.92)).current;
-  const opacityAnim = useRef(new Animated.Value(0)).current;
   const containerOpacity = useRef(new Animated.Value(1)).current;
+  const contentFade = useRef(new Animated.Value(0)).current;
+  const textFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(opacityAnim, { toValue: 1, duration: 450, useNativeDriver: true }),
-      Animated.spring(scaleAnim, { toValue: 1, friction: 6, tension: 40, useNativeDriver: true })
-    ]).start();
+    // 1. Instantly fade in the outline animation
+    Animated.timing(contentFade, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
 
-    const fadeTimeout = setTimeout(() => {
+    // 2. Fade in brand typography as outline takes shape
+    const textTimer = setTimeout(() => {
+      Animated.timing(textFade, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }, 700);
+
+    // 3. GIF runs for ~1.62s. Keep splash on screen for ~2.1s so the animation completes, then smoothly fade out
+    const exitTimer = setTimeout(() => {
       Animated.timing(containerOpacity, {
         toValue: 0,
-        duration: 350,
-        useNativeDriver: true
+        duration: 400,
+        useNativeDriver: true,
       }).start(() => {
         onFinish();
       });
-    }, 1100);
+    }, 2100);
 
-    return () => clearTimeout(fadeTimeout);
+    return () => {
+      clearTimeout(textTimer);
+      clearTimeout(exitTimer);
+    };
   }, []);
 
   return (
     <Animated.View style={[styles.splashContainer, { opacity: containerOpacity }]}>
-      <Animated.View style={{ transform: [{ scale: scaleAnim }], opacity: opacityAnim, alignItems: 'center' }}>
+      <StatusBar style="light" />
+      <Animated.View style={[styles.splashContent, { opacity: contentFade }]}>
         <Image
-          source={require('./assets/logo.png')}
-          style={styles.splashLogo}
+          source={require('./assets/output-onlinegiftools.gif')}
+          style={{ width: SPLASH_GIF_WIDTH, height: SPLASH_GIF_HEIGHT }}
           contentFit="contain"
+          autoplay={true}
         />
-        <Text style={styles.splashBrandName}>GHAR SANSAR</Text>
-        <Text style={styles.splashTagline}>Luxury Home & Kitchen Store</Text>
+        <Animated.View style={[styles.splashTextGroup, { opacity: textFade }]}>
+          <Text style={styles.splashBrandName}>GHAR SANSAR</Text>
+          <Text style={styles.splashTagline}>Luxury Home & Kitchen Store</Text>
+        </Animated.View>
       </Animated.View>
     </Animated.View>
   );
@@ -81,7 +104,7 @@ const AppContent: React.FC = () => {
 
   return (
     <View style={styles.container}>
-      <StatusBar style="dark" />
+      <StatusBar style={isSplashing ? "light" : "dark"} />
 
       {/* Floating Offline Banner when disconnected while browsing */}
       {isOffline && !isSplashing && (
@@ -147,28 +170,33 @@ const styles = StyleSheet.create({
   },
   splashContainer: {
     ...StyleSheet.absoluteFill,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#000000',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 9999,
   },
-  splashLogo: {
-    width: 90,
-    height: 90,
-    borderRadius: 20,
+  splashContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+  },
+  splashTextGroup: {
+    alignItems: 'center',
+    marginTop: 14,
   },
   splashBrandName: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: colors.textPrimary,
-    letterSpacing: 1.6,
-    marginTop: 18,
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 3,
+    textTransform: 'uppercase',
   },
   splashTagline: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: colors.brandForestGreen,
-    letterSpacing: 0.8,
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#D4AF37',
+    letterSpacing: 1.5,
     marginTop: 6,
+    textTransform: 'uppercase',
   },
 });

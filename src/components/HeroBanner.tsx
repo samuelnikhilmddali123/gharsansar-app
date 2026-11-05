@@ -56,8 +56,8 @@ export const HeroBanner: React.FC<HeroBannerProps> = React.memo(({ banners, onSh
     },
   ];
 
-  // Strictly use local high-resolution 16:9 graphic posters from assets/banners/ directly
-  const displayBanners = defaultBanners;
+  // Use backend banners when available; gracefully fall back to local high-resolution asset posters
+  const displayBanners = banners && banners.length > 0 ? banners : defaultBanners;
 
   useEffect(() => {
     if (displayBanners.length <= 1) return;

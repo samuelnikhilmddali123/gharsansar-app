@@ -286,8 +286,9 @@ export default function HomeView() {
             />
           }
         >
-          {/* 3. HERO PROMOTIONAL BANNER (Uses local assets/banners PNG images directly) */}
+          {/* 3. HERO PROMOTIONAL BANNER */}
           <HeroBanner
+            banners={banners}
             onShopNow={handleCategoryClick}
           />
 
