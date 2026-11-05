@@ -63,9 +63,9 @@ export default function HomeView() {
     try {
       await Promise.allSettled([
         refreshProductsFeed(),
-        fetchAllProducts(),
+        fetchAllProducts(true),
         fetchBanners(),
-        fetchCategories(),
+        fetchCategories(true),
         fetchFlashSale(),
         fetchActiveDiscounts(),
       ]);

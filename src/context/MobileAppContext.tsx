@@ -1,11 +1,24 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
-import { Platform, Linking } from 'react-native';
+import { Platform, Linking, AppState, AppStateStatus } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
 import * as Network from 'expo-network';
+import {
+  loadProductsFromCache,
+  saveProductsToCache,
+  updateProductInCache,
+  addProductToCache,
+  removeProductFromCache,
+  loadReturnGiftsFromCache,
+  saveReturnGiftsToCache,
+  loadCategoriesFromCache,
+  saveCategoriesToCache,
+  isCacheExpired,
+  clearProductCache,
+} from '../services/productCacheService';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -137,7 +150,7 @@ interface MobileAppContextType {
   // Return Gifts Collection & Bulk Ordering
   returnGifts: Product[];
   returnGiftsLoading: boolean;
-  fetchReturnGifts: () => Promise<void>;
+  fetchReturnGifts: (forceRefresh?: boolean) => Promise<void>;
 
   // Dynamic States & Actions
   banners: any[];
@@ -153,9 +166,9 @@ interface MobileAppContextType {
   addRecentSearch: (query: string) => void;
   clearRecentSearches: () => void;
   trendingSearches: string[];
-  fetchAllProducts: () => Promise<void>;
-  fetchBanners: () => Promise<void>;
-  fetchCategories: () => Promise<void>;
+  fetchAllProducts: (forceRefresh?: boolean) => Promise<void>;
+  fetchBanners: (forceRefresh?: boolean) => Promise<void>;
+  fetchCategories: (forceRefresh?: boolean) => Promise<void>;
   fetchFlashSale: () => Promise<void>;
 
   // Category Discounts & Pricing Architecture
@@ -221,6 +234,12 @@ interface MobileAppContextType {
   setIsOffline: (val: boolean) => void;
   checkNetworkConnectivity: () => Promise<boolean>;
   refreshAllData: () => Promise<any>;
+
+  // Smart Product Synchronization & Admin Change Sync
+  adminAddProduct: (product: Product) => Promise<void>;
+  adminUpdateProduct: (productId: string, updates: Partial<Product>) => Promise<void>;
+  adminDeleteProduct: (productId: string) => Promise<void>;
+  syncProducts: (force?: boolean) => Promise<boolean>;
 }
 
 const MobileAppContext = createContext<MobileAppContextType | undefined>(undefined);
@@ -378,6 +397,12 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   // Offline & Network Connectivity State
   const [isOffline, setIsOffline] = useState(false);
 
+  // Smart Product Caching & Synchronization References
+  const cachedEtagRef = useRef<string | null>(null);
+  const lastSyncTimeRef = useRef<number>(0);
+  const isSyncingRef = useRef<boolean>(false);
+  const appStateRef = useRef<AppStateStatus>((AppState.currentState || 'active') as AppStateStatus);
+
   const checkNetworkConnectivity = async (): Promise<boolean> => {
     try {
       const state = await Network.getNetworkStateAsync();
@@ -389,7 +414,44 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Always fetch live from API - No caching
+  // Conditional HTTP fetch supporting ETag (If-None-Match) & 304 Not Modified
+  const fetchWithConditionalSync = async (
+    url: string,
+    etag: string | null = null,
+    timeoutMs = 8000
+  ): Promise<{ notModified: boolean; data: any; newEtag: string | null }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const headers: Record<string, string> = {};
+      if (etag) {
+        headers['If-None-Match'] = etag;
+      }
+      const res = await fetch(url, { headers, signal: controller.signal });
+      clearTimeout(timer);
+
+      if (res.status === 304) {
+        return { notModified: true, data: null, newEtag: etag };
+      }
+
+      if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+      const newEtag = res.headers.get('etag');
+      const data = await res.json();
+      return { notModified: false, data, newEtag };
+    } catch (err: any) {
+      clearTimeout(timer);
+      Network.getNetworkStateAsync()
+        .then(state => {
+          if (!state.isConnected || state.isInternetReachable === false) {
+            setIsOffline(true);
+          }
+        })
+        .catch(() => {});
+      throw err;
+    }
+  };
+
+  // Standard fetch wrapper
   const fetchWithCache = async (url: string, _forceRefresh = false, timeoutMs = 8000) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -523,9 +585,19 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     };
   };
 
-  // Fetch Return Gifts from API
-  const fetchReturnGifts = async () => {
-    setReturnGiftsLoading(true);
+  // Fetch Return Gifts from API (with local cache backing)
+  const fetchReturnGifts = async (forceRefresh = false) => {
+    if (returnGifts.length === 0) {
+      const cached = await loadReturnGiftsFromCache();
+      if (cached && cached.length > 0) {
+        setReturnGifts(cached);
+        setReturnGiftsLoading(false);
+      }
+    }
+
+    if (returnGifts.length > 0 && !forceRefresh) return;
+
+    setReturnGiftsLoading(returnGifts.length === 0);
     try {
       const primaryUrl = 'https://gharsansar.website/api/return_gifts?category=All+Gifts&limit=1000&delay=400';
       let data: any = null;
@@ -537,10 +609,16 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
       const rawList = Array.isArray(data) ? data : (data?.products || data?.data || []);
       const mapped = rawList.map((p: any) => mapBackendProduct({ ...p, isReturnGift: true, category: 'return_gifts' }));
-      setReturnGifts(mapped);
+      if (mapped.length > 0) {
+        setReturnGifts(mapped);
+        await saveReturnGiftsToCache(mapped);
+      }
     } catch (err) {
       console.warn('Failed to fetch return gifts from API:', err);
-      setReturnGifts([]);
+      if (returnGifts.length === 0) {
+        const cached = await loadReturnGiftsFromCache();
+        if (cached && cached.length > 0) setReturnGifts(cached);
+      }
     } finally {
       setReturnGiftsLoading(false);
     }
@@ -564,9 +642,19 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Fetch all categories
-  const fetchCategories = async () => {
-    setCategoriesLoading(true);
+  // Fetch all categories (with local cache backing)
+  const fetchCategories = async (forceRefresh = false) => {
+    if (categories.length === 0) {
+      const cached = await loadCategoriesFromCache();
+      if (cached && cached.length > 0) {
+        setCategories(cached);
+        setCategoriesLoading(false);
+      }
+    }
+
+    if (categories.length > 0 && !forceRefresh) return;
+
+    setCategoriesLoading(categories.length === 0);
     try {
       const data = await fetchWithCache(`${BACKEND_URL}/api/products/categories`);
       if (data) {
@@ -623,10 +711,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         });
 
         setCategories(mapped);
+        await saveCategoriesToCache(mapped);
       }
     } catch (err) {
       console.warn('Failed to fetch categories from API:', err);
-      setCategories([]);
+      if (categories.length === 0) {
+        const cached = await loadCategoriesFromCache();
+        if (cached && cached.length > 0) setCategories(cached);
+      }
     } finally {
       setCategoriesLoading(false);
     }
@@ -678,32 +770,159 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     });
   };
 
-  // Fetch general products (with offline persistence and paginated fallback)
-  const fetchAllProducts = async () => {
-    setProductsLoading(true);
-    try {
-      const data = await fetchWithCache(`${BACKEND_URL}/api/products`);
-      if (data && Array.isArray(data) && data.length > 0) {
-        const flatList: Product[] = [];
-        data.forEach((cat: any, catIdx: number) => {
-          cat.subcategories?.forEach((sub: any, subIdx: number) => {
-            const itemKey = sub.images ? "images" : sub.products ? "products" : "services";
-            const items = sub[itemKey] || [];
-            items.forEach((item: any, idx: number) => {
-              const generatedId = item.prod_id || item.id || `prod_${catIdx}_${subIdx}_${idx}`;
-              flatList.push(mapBackendProduct({
-                ...item,
-                id: generatedId,
-                prod_id: generatedId,
-                category: cat.name,
-                subCategory: sub.name
-              }));
-            });
-          });
+  // Helper to parse nested catalog response into flat Product[]
+  const parseProductCatalog = (data: any[]): Product[] => {
+    const flatList: Product[] = [];
+    data.forEach((cat: any, catIdx: number) => {
+      cat.subcategories?.forEach((sub: any, subIdx: number) => {
+        const itemKey = sub.images ? "images" : sub.products ? "products" : "services";
+        const items = sub[itemKey] || [];
+        items.forEach((item: any, idx: number) => {
+          const generatedId = item.prod_id || item.id || `prod_${catIdx}_${subIdx}_${idx}`;
+          flatList.push(mapBackendProduct({
+            ...item,
+            id: generatedId,
+            prod_id: generatedId,
+            category: cat.name,
+            subCategory: sub.name
+          }));
         });
+      });
+    });
+    return flatList;
+  };
 
+  // Change-Based Product Synchronization via ETag (If-None-Match)
+  // When backend catalog hasn't changed, returns HTTP 304 Not Modified (0 bytes transferred)
+  const syncProducts = async (force = false): Promise<boolean> => {
+    if (isSyncingRef.current) return false;
+    isSyncingRef.current = true;
+    try {
+      const etag = force ? null : cachedEtagRef.current;
+      const { notModified, data, newEtag } = await fetchWithConditionalSync(
+        `${BACKEND_URL}/api/products`,
+        etag
+      );
+
+      if (notModified) {
+        lastSyncTimeRef.current = Date.now();
+        return false;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const flatList = parseProductCatalog(data);
         if (flatList.length > 0) {
           setProducts(flatList);
+          cachedEtagRef.current = newEtag;
+          lastSyncTimeRef.current = Date.now();
+          await saveProductsToCache(flatList, newEtag);
+          return true;
+        }
+      }
+      return false;
+    } catch (err) {
+      console.warn('[ProductSync] Silent product sync check failed:', err);
+      return false;
+    } finally {
+      isSyncingRef.current = false;
+    }
+  };
+
+  // Admin Product Change Synchronization:
+  // 1. Admin adds a product -> Update local state and persistent storage immediately
+  const adminAddProduct = async (newProd: Product) => {
+    setProducts(prev => {
+      const filtered = prev.filter(p => p.id !== newProd.id && (p as any).prod_id !== newProd.id);
+      return [newProd, ...filtered];
+    });
+    await addProductToCache(newProd);
+  };
+
+  // 2. Admin edits product details/price/images -> Update affected item in memory & persistent cache
+  const adminUpdateProduct = async (productId: string, updates: Partial<Product>) => {
+    setProducts(prev =>
+      prev.map(p => {
+        if (p.id === productId || (p as any).prod_id === productId) {
+          return { ...p, ...updates };
+        }
+        return p;
+      })
+    );
+    setPaginatedProducts(prev =>
+      prev.map(p => {
+        if (p.id === productId || (p as any).prod_id === productId) {
+          return { ...p, ...updates };
+        }
+        return p;
+      })
+    );
+    setReturnGifts(prev =>
+      prev.map(p => {
+        if (p.id === productId || (p as any).prod_id === productId) {
+          return { ...p, ...updates };
+        }
+        return p;
+      })
+    );
+    await updateProductInCache(productId, updates);
+  };
+
+  // 3. Admin deletes a product -> Remove from state & persistent storage immediately
+  const adminDeleteProduct = async (productId: string) => {
+    setProducts(prev => prev.filter(p => p.id !== productId && (p as any).prod_id !== productId));
+    setPaginatedProducts(prev => prev.filter(p => p.id !== productId && (p as any).prod_id !== productId));
+    setReturnGifts(prev => prev.filter(p => p.id !== productId && (p as any).prod_id !== productId));
+    await removeProductFromCache(productId);
+  };
+
+  // Fetch general products (smart persistent caching & change-based ETag synchronization)
+  const fetchAllProducts = async (forceRefresh = false) => {
+    // 1. If we already have products in state and this is not a force refresh,
+    // do NOT refetch or show loading indicators. Perform lightweight background sync if expired.
+    if (products.length > 0 && !forceRefresh) {
+      if (isCacheExpired(lastSyncTimeRef.current)) {
+        syncProducts(false).catch(() => {});
+      }
+      return;
+    }
+
+    // 2. If state is empty, restore immediately from persistent local cache
+    if (products.length === 0) {
+      const cached = await loadProductsFromCache();
+      if (cached && cached.products.length > 0) {
+        setProducts(cached.products);
+        cachedEtagRef.current = cached.etag;
+        lastSyncTimeRef.current = cached.lastSync;
+        setProductsLoading(false);
+
+        // Run background verification only if cache expired or forceRefresh requested
+        if (forceRefresh || isCacheExpired(cached.lastSync)) {
+          syncProducts(forceRefresh).catch(() => {});
+        }
+        return;
+      }
+    }
+
+    // 3. No valid cache exists (initial install or cache cleared): Show loading indicator while fetching
+    setProductsLoading(true);
+    try {
+      const { notModified, data, newEtag } = await fetchWithConditionalSync(
+        `${BACKEND_URL}/api/products`,
+        cachedEtagRef.current
+      );
+
+      if (notModified) {
+        setProductsLoading(false);
+        return;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        const flatList = parseProductCatalog(data);
+        if (flatList.length > 0) {
+          setProducts(flatList);
+          cachedEtagRef.current = newEtag;
+          lastSyncTimeRef.current = Date.now();
+          await saveProductsToCache(flatList, newEtag);
           return;
         }
       }
@@ -719,6 +938,7 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
           if (pageData && Array.isArray(pageData.products) && pageData.products.length > 0) {
             const mapped = pageData.products.map(mapBackendProduct);
             setProducts(mapped);
+            await saveProductsToCache(mapped, null);
             return;
           }
         }
@@ -727,7 +947,13 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       }
     } catch (err) {
       console.warn('Failed to fetch product list from backend API:', err);
-      setProducts([]);
+      // Keep existing cached products if API fails
+      if (products.length === 0) {
+        const fallback = await loadProductsFromCache();
+        if (fallback && fallback.products.length > 0) {
+          setProducts(fallback.products);
+        }
+      }
     } finally {
       setProductsLoading(false);
     }
@@ -762,10 +988,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const refreshAllData = async () => {
-    setProductsLoading(true);
-    setCategoriesLoading(true);
-    setBannersLoading(true);
-    setReturnGiftsLoading(true);
+    // Only show full loading indicators if we have no existing data in memory
+    if (products.length === 0) setProductsLoading(true);
+    if (categories.length === 0) setCategoriesLoading(true);
+    if (banners.length === 0) setBannersLoading(true);
+    if (returnGifts.length === 0) setReturnGiftsLoading(true);
 
     const isConnected = await checkNetworkConnectivity();
     if (!isConnected) {
@@ -779,10 +1006,10 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     try {
       const results = await Promise.allSettled([
         fetchActiveDiscounts(),
-        fetchAllProducts(),
-        fetchReturnGifts(),
+        fetchAllProducts(true),
+        fetchReturnGifts(true),
         fetchBanners(),
-        fetchCategories(),
+        fetchCategories(true),
         fetchFlashSale(),
         fetchWishlist(),
         fetchNotifications(),
@@ -1156,31 +1383,49 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     };
 
     const initializeData = async () => {
-      // Clean up any previously stored offline cache
+      // 1. Immediately restore cached catalog from local persistent storage (0ms instant display)
       try {
-        await AsyncStorage.multiRemove([
-          '@cached_products',
-          '@cached_return_gifts',
-          '@cached_banners',
-          '@cached_categories',
-          '@cached_flashsale',
-          '@cached_active_discounts'
+        const [cachedCatalog, cachedGifts, cachedCats] = await Promise.all([
+          loadProductsFromCache(),
+          loadReturnGiftsFromCache(),
+          loadCategoriesFromCache()
         ]);
-        await ExpoImage.clearDiskCache();
-        await ExpoImage.clearMemoryCache();
-      } catch (e) { }
 
+        if (cachedCatalog && cachedCatalog.products.length > 0) {
+          setProducts(cachedCatalog.products);
+          cachedEtagRef.current = cachedCatalog.etag;
+          lastSyncTimeRef.current = cachedCatalog.lastSync;
+          setProductsLoading(false);
+        }
+
+        if (cachedGifts && cachedGifts.length > 0) {
+          setReturnGifts(cachedGifts);
+          setReturnGiftsLoading(false);
+        }
+
+        if (cachedCats && cachedCats.length > 0) {
+          setCategories(cachedCats);
+          setCategoriesLoading(false);
+        }
+      } catch (cacheErr) {
+        console.warn('Failed restoring from local cache:', cacheErr);
+      }
+
+      // 2. Check network connectivity
       const isConnected = await checkNetworkConnectivity();
       if (!isConnected) {
         setIsOffline(true);
+        // Valid cached products are already visible; no loading spinner or error screen needed
         setProductsLoading(false);
         setCategoriesLoading(false);
         setBannersLoading(false);
         setReturnGiftsLoading(false);
         setDiscountsLoading(false);
+        restoreAuthSession();
         return;
       }
 
+      // 3. Online: verify auth and run background sync checks
       await Promise.all([
         fetchActiveDiscounts(),
         fetchAllProducts(),
@@ -1197,14 +1442,42 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     initializeData();
     registerForPushNotificationsAsync();
 
-    // Add network state listener
+    // App Lifecycle Management (AppState):
+    // - App moves to background / Recents -> Preserve memory and persistent cache
+    // - App returns to foreground -> Do NOT automatically refetch products
+    let appStateSubscription: any = null;
+    try {
+      appStateSubscription = AppState.addEventListener('change', (nextAppState) => {
+        if (
+          appStateRef.current.match(/inactive|background/) &&
+          nextAppState === 'active'
+        ) {
+          // Reopened from Recents/background. Products remain in state.
+          // Only perform silent background ETag check if cache expired.
+          if (isCacheExpired(lastSyncTimeRef.current)) {
+            syncProducts(false).catch(() => {});
+          }
+        }
+        appStateRef.current = nextAppState;
+      });
+    } catch (e) {
+      console.warn('AppState listener unavailable:', e);
+    }
+
+    // Network connectivity listener:
+    // When network reconnects, do NOT trigger full product downloads if products are already loaded!
     let networkSubscription: any = null;
     try {
       networkSubscription = Network.addNetworkStateListener(state => {
         const connected = Boolean(state.isConnected && state.isInternetReachable !== false);
         setIsOffline(!connected);
         if (connected) {
-          refreshAllData().catch(() => {});
+          setProducts(currentProds => {
+            if (currentProds.length === 0) {
+              fetchAllProducts().catch(() => {});
+            }
+            return currentProds;
+          });
         }
       });
     } catch (e) {
@@ -1222,6 +1495,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
 
     return () => {
+      if (appStateSubscription?.remove) {
+        appStateSubscription.remove();
+      }
       if (networkSubscription?.remove) {
         networkSubscription.remove();
       }
@@ -2262,7 +2538,13 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         isOffline,
         setIsOffline,
         checkNetworkConnectivity,
-        refreshAllData
+        refreshAllData,
+
+        // Smart Product Synchronization & Admin Mutations
+        adminAddProduct,
+        adminUpdateProduct,
+        adminDeleteProduct,
+        syncProducts
       }}
     >
       {children}
