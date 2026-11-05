@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, Animated, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, Animated, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
+import { useAssets } from 'expo-asset';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MobileAppProvider, useMobileApp } from './src/context/MobileAppContext';
 import { BottomNavigation } from './src/components/BottomNavigation';
@@ -20,64 +21,39 @@ import { OfflineBanner } from './src/components/OfflineBanner';
 // ----------------------------------------------------------------------
 // LUXURY STARTUP SPLASH SCREEN (Animated House Outline GIF on Black)
 // ----------------------------------------------------------------------
-const { width: screenWidth } = Dimensions.get('window');
-const SPLASH_GIF_WIDTH = Math.min(screenWidth * 0.88, 360);
-const SPLASH_GIF_HEIGHT = Math.round(SPLASH_GIF_WIDTH / (618 / 274));
-
 const LuxurySplashScreen: React.FC<{ onFinish: () => void }> = ({ onFinish }) => {
+  const [assets] = useAssets([require('./assets/output-onlinegiftools.gif')]);
   const containerOpacity = useRef(new Animated.Value(1)).current;
-  const contentFade = useRef(new Animated.Value(0)).current;
-  const textFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    // 1. Instantly fade in the outline animation
-    Animated.timing(contentFade, {
-      toValue: 1,
-      duration: 300,
-      useNativeDriver: true,
-    }).start();
-
-    // 2. Fade in brand typography as outline takes shape
-    const textTimer = setTimeout(() => {
-      Animated.timing(textFade, {
-        toValue: 1,
-        duration: 500,
-        useNativeDriver: true,
-      }).start();
-    }, 700);
-
-    // 3. GIF runs for ~1.62s. Keep splash on screen for ~2.1s so the animation completes, then smoothly fade out
+    // GIF plays for ~1.62 seconds. Keep on screen for ~2.0s so animation finishes completely before fading into app
     const exitTimer = setTimeout(() => {
       Animated.timing(containerOpacity, {
         toValue: 0,
-        duration: 400,
+        duration: 350,
         useNativeDriver: true,
       }).start(() => {
         onFinish();
       });
-    }, 2100);
+    }, 2000);
 
-    return () => {
-      clearTimeout(textTimer);
-      clearTimeout(exitTimer);
-    };
+    return () => clearTimeout(exitTimer);
   }, []);
+
+  const gifUri = assets?.[0]?.localUri || assets?.[0]?.uri;
+  const gifSource = gifUri ? { uri: gifUri } : require('./assets/output-onlinegiftools.gif');
 
   return (
     <Animated.View style={[styles.splashContainer, { opacity: containerOpacity }]}>
       <StatusBar style="light" />
-      <Animated.View style={[styles.splashContent, { opacity: contentFade }]}>
+      <View style={styles.splashGifWrapper}>
         <Image
-          source={require('./assets/output-onlinegiftools.gif')}
-          style={{ width: SPLASH_GIF_WIDTH, height: SPLASH_GIF_HEIGHT }}
+          source={gifSource}
+          style={styles.splashGif}
           contentFit="contain"
           autoplay={true}
         />
-        <Animated.View style={[styles.splashTextGroup, { opacity: textFade }]}>
-          <Text style={styles.splashBrandName}>GHAR SANSAR</Text>
-          <Text style={styles.splashTagline}>Luxury Home & Kitchen Store</Text>
-        </Animated.View>
-      </Animated.View>
+      </View>
     </Animated.View>
   );
 };
@@ -175,28 +151,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     zIndex: 9999,
   },
-  splashContent: {
+  splashGifWrapper: {
+    width: '90%',
+    maxWidth: 380,
+    aspectRatio: 618 / 274,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  splashGif: {
     width: '100%',
-  },
-  splashTextGroup: {
-    alignItems: 'center',
-    marginTop: 14,
-  },
-  splashBrandName: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#FFFFFF',
-    letterSpacing: 3,
-    textTransform: 'uppercase',
-  },
-  splashTagline: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#D4AF37',
-    letterSpacing: 1.5,
-    marginTop: 6,
-    textTransform: 'uppercase',
+    height: '100%',
   },
 });
