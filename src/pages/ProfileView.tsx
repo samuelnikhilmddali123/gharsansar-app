@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   StyleSheet,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   TextInput,
   Platform,
+  RefreshControl,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -73,6 +74,16 @@ export const ProfileView: React.FC = () => {
       fetchOrders();
     }
   }, [isAuthenticated, activeSection]);
+
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchOrders();
+    } catch {}
+    setRefreshing(false);
+  }, [fetchOrders]);
 
   // If not authenticated, render the exact Ghar Sansar Sign In & Register page from Image 1 & 2!
   if (!isAuthenticated) {
@@ -224,6 +235,14 @@ export const ProfileView: React.FC = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
         extraScrollHeight={160}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#031c03"
+            colors={['#031c03']}
+          />
+        }
       >
         {/* ============================================================== */}
         {/* TOP PROFILE HEADER CARD (IMAGE 2) */}

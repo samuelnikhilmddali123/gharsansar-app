@@ -21,6 +21,19 @@ import {
   isCacheExpired,
   clearProductCache,
 } from '../services/productCacheService';
+import {
+  createBackendOrder,
+  fetchCustomerBackendOrders,
+  syncCustomerProfile,
+  clearBackendCart,
+  setApiAuthToken,
+  setApiUserId,
+  registerUnauthorizedHandler,
+  CustomerPayload,
+  OrderItemPayload,
+  BackendOrderPayload,
+  ProfileSyncPayload,
+} from '../services/apiService';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -120,12 +133,15 @@ export interface UserProfile {
 }
 
 export interface DeliveryAddress {
+  id?: string;
   name?: string;
   phone?: string;
   address: string;
+  street_address?: string;
   city: string;
   state: string;
   zipCode: string;
+  pincode?: string;
   isDefault?: boolean;
 }
 
@@ -219,7 +235,7 @@ interface MobileAppContextType {
   orders: any[];
   ordersLoading: boolean;
   fetchOrders: () => Promise<void>;
-  placeOrder: (orderPayload: any) => Promise<{ success: boolean; orderId?: string; error?: string }>;
+  placeOrder: (orderPayload: any) => Promise<{ success: boolean; orderId?: string; orderNumber?: string; order?: any; error?: string }>;
 
   // Real Delivery Address State
   currentAddress: DeliveryAddress | null;
@@ -1338,6 +1354,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         }
 
         if (activeUser) {
+          setApiAuthToken(storedToken);
+          setApiUserId(activeUser.id || (activeUser as any)._id || activeUser.email || null);
           userRef.current = activeUser;
           isAuthenticatedRef.current = true;
           authTokenRef.current = storedToken;
@@ -1510,6 +1528,15 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
       console.warn('Foreground notification listener unavailable:', e);
     }
 
+    registerUnauthorizedHandler(() => {
+      userRef.current = null;
+      authTokenRef.current = null;
+      isAuthenticatedRef.current = false;
+      setUser(null);
+      setAuthToken(null);
+      setIsAuthenticated(false);
+    });
+
     return () => {
       if (appStateSubscription?.remove) {
         appStateSubscription.remove();
@@ -1527,49 +1554,61 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   const fetchOrdersForUser = async (targetUser?: UserProfile | null, tokenOverride?: string | null) => {
     const target = targetUser !== undefined ? targetUser : user;
     const activeToken = tokenOverride !== undefined ? tokenOverride : authToken;
-    if (!target && !activeToken) {
-      setOrders([]);
-      return;
+
+    if (activeToken) {
+      setApiAuthToken(activeToken);
     }
+    if (target) {
+      setApiUserId(target.id || (target as any)._id || target.email);
+    }
+
     setOrdersLoading(true);
     try {
-      // 1. Try /api/v1/orders with JWT Bearer token
-      if (activeToken) {
-        const res = await fetch(`${BACKEND_URL}/api/v1/orders`, {
-          headers: {
-            'Authorization': `Bearer ${activeToken}`,
-            'Content-Type': 'application/json',
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && Array.isArray(data.orders)) {
-            setOrders(data.orders);
-            return;
-          } else if (Array.isArray(data)) {
-            setOrders(data);
-            return;
+      // 1. Fetch live orders from production backend (/v1/orders) via centralized Axios service
+      const serverOrders = await fetchCustomerBackendOrders();
+      if (Array.isArray(serverOrders)) {
+        console.log('[GharSansar Orders] Loaded', serverOrders.length, 'orders from live backend');
+        setOrders(serverOrders);
+        await AsyncStorage.setItem('user_orders', JSON.stringify(serverOrders));
+        return;
+      }
+    } catch (err: any) {
+      console.warn('[GharSansar Orders] Backend orders fetch warning:', err.response?.status || err.message);
+
+      // 2. Fallback to /api/orders query parameter if JWT token is not yet ready
+      const idOrEmail = target?.id || target?.email;
+      if (idOrEmail) {
+        try {
+          const res = await fetch(`${BACKEND_URL}/api/orders?userId=${encodeURIComponent(idOrEmail)}&email=${encodeURIComponent(target?.email || '')}`, {
+            headers: {
+              'user-id': idOrEmail,
+              ...(activeToken ? { 'Authorization': `Bearer ${activeToken}` } : {})
+            }
+          });
+          if (res.ok) {
+            const data = await res.json();
+            const list = Array.isArray(data) ? data : (data.orders || []);
+            if (Array.isArray(list) && list.length > 0) {
+              setOrders(list);
+              await AsyncStorage.setItem('user_orders', JSON.stringify(list));
+              return;
+            }
           }
+        } catch (fallbackErr) {
+          console.warn('[GharSansar Orders] Fallback orders fetch error:', fallbackErr);
         }
       }
 
-      // 2. Fallback to /api/orders
-      const idOrEmail = target?.id || target?.email;
-      if (idOrEmail) {
-        const res = await fetch(`${BACKEND_URL}/api/orders?userId=${encodeURIComponent(idOrEmail)}&email=${encodeURIComponent(target?.email || '')}`, {
-          headers: {
-            'user-id': idOrEmail
-          }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data)) {
-            setOrders(data);
+      // 3. Graceful offline fallback to locally cached orders so customer never sees empty/broken screen
+      try {
+        const stored = await AsyncStorage.getItem('user_orders');
+        if (stored) {
+          const cached = JSON.parse(stored);
+          if (Array.isArray(cached) && cached.length > 0) {
+            setOrders(cached);
           }
         }
-      }
-    } catch (err) {
-      console.warn('Failed fetching real orders from backend:', err);
+      } catch {}
     } finally {
       setOrdersLoading(false);
     }
@@ -1676,6 +1715,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   // Reusable helper to set authenticated session, tokens, address, and profile
   const applyAuthenticatedSession = async (userObj: any, token: string) => {
+    setApiAuthToken(token);
+    setApiUserId(userObj?.id || userObj?._id || userObj?.email || null);
     userRef.current = userObj;
     isAuthenticatedRef.current = true;
     authTokenRef.current = token;
@@ -2025,6 +2066,8 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const logout = async () => {
+    setApiAuthToken(null);
+    setApiUserId(null);
     userRef.current = null;
     authTokenRef.current = null;
     isAuthenticatedRef.current = false;
@@ -2080,224 +2123,239 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
   const saveShippingAddress = async (addr: any) => {
     const formattedAddr: DeliveryAddress = {
-      name: addr.name || user?.name || (user as any)?.full_name || 'Customer',
-      phone: addr.phone || user?.phone || '',
-      address: addr.address || addr.street_address || '',
-      city: addr.city || '',
-      state: addr.state || 'Andhra Pradesh',
-      zipCode: addr.zipCode || addr.pincode || '',
-      isDefault: true,
+      id: addr.id || `addr_${Date.now()}`,
+      name: (addr.name || user?.name || (user as any)?.full_name || 'Customer').trim(),
+      phone: (addr.phone || user?.phone || '').trim(),
+      address: (addr.address || addr.street_address || '').trim(),
+      city: (addr.city || '').trim(),
+      state: (addr.state || 'Andhra Pradesh').trim(),
+      zipCode: (addr.zipCode || addr.pincode || '').trim(),
+      isDefault: addr.isDefault !== undefined ? Boolean(addr.isDefault) : true,
     };
 
     setCurrentAddress(formattedAddr);
     await AsyncStorage.setItem('user_shipping_address', JSON.stringify(formattedAddr));
 
-    if (user) {
+    if (user && user.email) {
       const existingAddrs: any[] = user.addresses || [];
+      const baseAddrs = formattedAddr.isDefault
+        ? existingAddrs.map((a: any) => ({ ...a, isDefault: false }))
+        : existingAddrs;
+
       const updatedAddrs = [
         formattedAddr,
-        ...existingAddrs.filter((a: any) => (a.id && (formattedAddr as any).id ? a.id !== (formattedAddr as any).id : a.address !== formattedAddr.address))
+        ...baseAddrs.filter((a: any) => (a.id && formattedAddr.id ? a.id !== formattedAddr.id : a.address !== formattedAddr.address))
       ];
 
-      // Update both addresses array and primary street_address, city, state, pincode in MongoDB Atlas backend
-      await updateUserProfile({
-        addresses: updatedAddrs,
+      const profilePayload: ProfileSyncPayload = {
+        email: user.email,
         phone: formattedAddr.phone || user.phone,
         street_address: formattedAddr.address,
         city: formattedAddr.city,
         state: formattedAddr.state,
         pincode: formattedAddr.zipCode,
-      } as any);
-    }
-  };
+        addresses: updatedAddrs.map((a: any) => ({
+          id: a.id || `addr_${Date.now()}`,
+          firstName: (a.name || 'Customer').split(' ')[0],
+          lastName: (a.name || '').split(' ').slice(1).join(' ') || '',
+          name: a.name,
+          phone: a.phone || '',
+          address: a.address || a.street_address || '',
+          street_address: a.address || a.street_address || '',
+          city: a.city || '',
+          state: a.state || 'Andhra Pradesh',
+          zipCode: a.zipCode || a.pincode || '',
+          pincode: a.zipCode || a.pincode || '',
+          country: 'India',
+          isDefault: Boolean(a.isDefault),
+        })),
+        name: user.name || (user as any).full_name,
+        full_name: user.name || (user as any).full_name,
+      };
 
-  const deleteShippingAddress = async (addrId: string) => {
-    if (user && user.addresses) {
-      const updatedAddrs = user.addresses.filter((a: any) => (a.id || a.address) !== addrId);
-      await updateUserProfile({ addresses: updatedAddrs });
-      if (currentAddress && ((currentAddress as any).id === addrId || currentAddress.address === addrId)) {
-        const nextDef = updatedAddrs.find((a: any) => a.isDefault) || updatedAddrs[0] || null;
-        setCurrentAddress(nextDef);
-        if (nextDef) {
-          await AsyncStorage.setItem('user_shipping_address', JSON.stringify(nextDef));
+      try {
+        const syncRes = await syncCustomerProfile(profilePayload);
+        if (syncRes && syncRes.user) {
+          setUser(syncRes.user);
+          await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(syncRes.user));
         } else {
-          await AsyncStorage.removeItem('user_shipping_address');
+          setUser(prev => prev ? { ...prev, addresses: updatedAddrs } : prev);
         }
+      } catch (err) {
+        console.warn('[GharSansar API] Address sync warning:', err);
       }
     }
   };
 
-  const placeOrder = async (orderPayload: any) => {
-    const fallbackOrderId = `GS-ORD-${Date.now().toString().slice(-6)}`;
-    const fallbackOrderNumber = `GS${Date.now().toString().slice(-8)}`;
+  const deleteShippingAddress = async (addrId: string) => {
+    if (user && user.email && user.addresses) {
+      const updatedAddrs = user.addresses.filter((a: any) => (a.id || a.address) !== addrId);
+      const nextDef = updatedAddrs.find((a: any) => a.isDefault) || updatedAddrs[0] || null;
+      setCurrentAddress(nextDef);
+      if (nextDef) {
+        await AsyncStorage.setItem('user_shipping_address', JSON.stringify(nextDef));
+      } else {
+        await AsyncStorage.removeItem('user_shipping_address');
+      }
 
-    const effectiveUserId = String(orderPayload.userId || user?.id || (user as any)?._id || user?.email || 'guest');
+      const profilePayload: ProfileSyncPayload = {
+        email: user.email,
+        addresses: updatedAddrs.map((a: any) => ({
+          id: a.id || `addr_${Date.now()}`,
+          firstName: (a.name || 'Customer').split(' ')[0],
+          lastName: (a.name || '').split(' ').slice(1).join(' ') || '',
+          name: a.name,
+          phone: a.phone || '',
+          address: a.address || a.street_address || '',
+          street_address: a.address || a.street_address || '',
+          city: a.city || '',
+          state: a.state || 'Andhra Pradesh',
+          zipCode: a.zipCode || a.pincode || '',
+          pincode: a.zipCode || a.pincode || '',
+          country: 'India',
+          isDefault: Boolean(a.isDefault),
+        })),
+        street_address: nextDef ? (nextDef.address || nextDef.street_address) : '',
+        city: nextDef ? nextDef.city : '',
+        state: nextDef ? nextDef.state : '',
+        pincode: nextDef ? (nextDef.zipCode || nextDef.pincode) : '',
+      };
 
-    // Normalize customer details
-    const customerObj = {
-      firstName: (orderPayload.customer?.firstName || user?.name || (user as any)?.full_name || 'Customer').trim(),
-      lastName: (orderPayload.customer?.lastName || '').trim(),
-      email: (orderPayload.customer?.email || user?.email || 'customer@gharsansar.website').trim().toLowerCase(),
-      phone: (orderPayload.customer?.phone || user?.phone || '9999999999').trim(),
-      address: (orderPayload.customer?.address || '').trim(),
-      city: (orderPayload.customer?.city || '').trim(),
-      state: (orderPayload.customer?.state || 'Andhra Pradesh').trim(),
-      zipCode: (orderPayload.customer?.zipCode || '').trim(),
-      country: 'India',
-      notes: orderPayload.customer?.notes || orderPayload.notes || '',
+      try {
+        const syncRes = await syncCustomerProfile(profilePayload);
+        if (syncRes && syncRes.user) {
+          setUser(syncRes.user);
+          await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(syncRes.user));
+        } else {
+          setUser(prev => prev ? { ...prev, addresses: updatedAddrs } : prev);
+        }
+      } catch (err) {
+        console.warn('[GharSansar API] Delete address sync warning:', err);
+      }
+    }
+  };
+
+  const placeOrder = async (orderPayload: any): Promise<{ success: boolean; orderId?: string; orderNumber?: string; order?: any; error?: string }> => {
+    // 1. Normalize customer
+    const rawCustomer = orderPayload.customer || {};
+    const fallbackName = user?.name || (user as any)?.full_name || 'Customer';
+    const splitName = (rawCustomer.firstName || fallbackName).trim().split(' ');
+    const firstName = (rawCustomer.firstName || splitName[0] || 'Customer').trim();
+    const lastName = (rawCustomer.lastName !== undefined ? rawCustomer.lastName : splitName.slice(1).join(' ') || '').trim();
+    const phone = (rawCustomer.phone || currentAddress?.phone || user?.phone || '9492664870').trim();
+    const email = (rawCustomer.email || user?.email || 'customer@gharsansar.website').trim().toLowerCase();
+    const address = (rawCustomer.address || currentAddress?.address || '').trim();
+    const city = (rawCustomer.city || currentAddress?.city || 'Vijayawada').trim();
+    const state = (rawCustomer.state || currentAddress?.state || 'Andhra Pradesh').trim();
+    const zipCode = (rawCustomer.zipCode || currentAddress?.zipCode || '520001').trim();
+    const country = rawCustomer.country || 'India';
+    const notes = (rawCustomer.notes || orderPayload.notes || 'Mobile App Order').trim();
+
+    const customerObj: CustomerPayload = {
+      firstName,
+      lastName,
+      email,
+      phone,
+      address,
+      city,
+      state,
+      zipCode,
+      country,
+      notes,
     };
 
-    // Normalize shipping address
-    const shippingAddressObj = orderPayload.shippingAddress || {
-      ...customerObj,
-      isDefault: true,
-    };
-
-    // Normalize items array
-    const cleanItems = Array.isArray(orderPayload.items)
+    // 2. Normalize items
+    const cleanItems: OrderItemPayload[] = Array.isArray(orderPayload.items)
       ? orderPayload.items.map((item: any) => ({
-        id: String(item.id || item.productId || `item_${Date.now()}`),
-        productId: String(item.productId || item.id || ''),
+        productId: String(item.productId || item.id || `prod_${Date.now()}`),
         name: String(item.name || item.title || 'Product'),
         price: Number(item.price !== undefined ? item.price : item.finalPrice) || 0,
         quantity: Math.max(1, parseInt(item.quantity, 10) || 1),
         image: item.image || '',
-        selectedSize: item.selectedSize || '',
+        selectedSize: item.selectedSize || 'Standard',
         selectedColor: item.selectedColor || '',
-        isReturnGift: Boolean(item.isReturnGift),
       }))
       : [];
 
     const finalSubtotal = Number(orderPayload.subtotal) || cleanItems.reduce((acc: number, itm: any) => acc + itm.price * itm.quantity, 0);
     const finalTotal = Number(orderPayload.total || orderPayload.totalAmount) || finalSubtotal;
 
-    const fullPayload = {
-      userId: effectiveUserId,
+    // Normalize payment method to backend convention
+    let cleanPaymentMethod: 'razorpay' | 'cod' | 'upi' | 'whatsapp' = 'razorpay';
+    const rawMethod = String(orderPayload.paymentMethod || '').toLowerCase();
+    if (rawMethod.includes('whatsapp')) cleanPaymentMethod = 'whatsapp';
+    else if (rawMethod.includes('cod') || rawMethod.includes('cash')) cleanPaymentMethod = 'cod';
+    else if (rawMethod.includes('upi')) cleanPaymentMethod = 'upi';
+    else cleanPaymentMethod = 'razorpay';
+
+    let cleanPaymentStatus: 'pending' | 'paid' | 'failed' = 'pending';
+    if (cleanPaymentMethod === 'cod' || cleanPaymentMethod === 'whatsapp') {
+      cleanPaymentStatus = 'pending';
+    } else if (orderPayload.paymentStatus === 'paid') {
+      cleanPaymentStatus = 'paid';
+    }
+
+    const backendPayload: BackendOrderPayload = {
       customer: customerObj,
-      shippingAddress: shippingAddressObj,
       items: cleanItems,
       subtotal: finalSubtotal,
       shipping: Number(orderPayload.shipping || 0),
       tax: Number(orderPayload.tax || 0),
       discount: Number(orderPayload.discount || 0),
       total: finalTotal,
-      totalAmount: finalTotal,
-      paymentStatus: orderPayload.paymentStatus || 'paid',
-      paymentMethod: orderPayload.paymentMethod || 'Prepaid / UPI',
-      paymentId: orderPayload.paymentId || `pay_mobile_${Date.now()}`,
-      notes: orderPayload.notes || '',
+      paymentStatus: cleanPaymentStatus,
+      paymentMethod: cleanPaymentMethod,
+      paymentId: orderPayload.paymentId || (cleanPaymentStatus === 'paid' ? `pay_mobile_${Date.now()}` : ''),
+      notes: notes,
     };
 
-    const localOrder = {
-      id: fallbackOrderId,
-      orderNumber: fallbackOrderNumber,
-      userId: effectiveUserId,
-      timestamp: new Date().toISOString(),
-      customer: customerObj,
-      shippingAddress: shippingAddressObj,
-      items: cleanItems,
-      subtotal: finalSubtotal,
-      shipping: Number(orderPayload.shipping || 0),
-      tax: Number(orderPayload.tax || 0),
-      discount: Number(orderPayload.discount || 0),
-      total: finalTotal,
-      status: 'processing',
-      paymentStatus: 'paid',
-      paymentId: fullPayload.paymentId,
-      paymentMethod: fullPayload.paymentMethod,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'user-id': effectiveUserId,
-    };
-    if (authToken) {
-      headers['Authorization'] = `Bearer ${authToken}`;
-    }
-
-    console.log('[GharSansar Orders] Posting order to live server:', `${BACKEND_URL}/api/v1/orders`);
-
-    let res: Response | null = null;
-    let data: any = null;
-
-    // 1. First attempt: POST /api/v1/orders
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      console.log('[GharSansar Orders] Submitting live backend order via centralized Axios client...', cleanPaymentMethod);
+      const response = await createBackendOrder(backendPayload);
 
-      res = await fetch(`${BACKEND_URL}/api/v1/orders`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(fullPayload),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      data = await res.json().catch(() => null);
-    } catch (v1Err) {
-      console.warn('[GharSansar Orders] /api/v1/orders error, trying /api/orders fallback:', v1Err);
-    }
+      if (response && (response.success || response.order)) {
+        const confirmedOrder: any = response.order || response;
+        const confirmedId: string = confirmedOrder.id || confirmedOrder.orderNumber || confirmedOrder._id || `GS-ORD-${Date.now().toString().slice(-6)}`;
+        const confirmedOrderNumber: string = confirmedOrder.orderNumber || confirmedId;
 
-    // 2. Second attempt: Fallback to POST /api/orders
-    if (!res || !res.ok || !(data?.success || data?.order)) {
-      try {
-        const controller2 = new AbortController();
-        const timeoutId2 = setTimeout(() => controller2.abort(), 20000);
+        console.log('[GharSansar Orders] Live backend confirmed order:', confirmedOrderNumber, 'ID:', confirmedId);
 
-        const res2 = await fetch(`${BACKEND_URL}/api/orders`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'user-id': effectiveUserId,
-          },
-          body: JSON.stringify(fullPayload),
-          signal: controller2.signal,
-        });
-        clearTimeout(timeoutId2);
-        const data2 = await res2.json().catch(() => null);
+        // Update local orders state immediately
+        setOrders(prev => [confirmedOrder, ...prev.filter((o: any) => o.id !== confirmedId && o.orderNumber !== confirmedOrderNumber)]);
 
-        if (res2.ok && (data2?.success || data2?.order)) {
-          res = res2;
-          data = data2;
-        }
-      } catch (fallbackErr) {
-        console.warn('[GharSansar Orders] /api/orders fallback also error:', fallbackErr);
+        // Persist to user_orders in AsyncStorage
+        try {
+          const stored = await AsyncStorage.getItem('user_orders');
+          const current = stored ? JSON.parse(stored) : [];
+          await AsyncStorage.setItem('user_orders', JSON.stringify([confirmedOrder, ...current.filter((o: any) => o.id !== confirmedId && o.orderNumber !== confirmedOrderNumber)]));
+        } catch {}
+
+        // Clear remote backend cart
+        clearBackendCart().catch(() => {});
+
+        // Fetch fresh orders from backend to ensure perfect synchronization with website
+        fetchOrdersForUser().catch(() => {});
+
+        return {
+          success: true,
+          orderId: confirmedId,
+          orderNumber: confirmedOrderNumber,
+          order: confirmedOrder,
+        };
       }
+
+      return {
+        success: false,
+        error: response?.error || response?.message || 'Failed to place order on backend server.',
+      };
+    } catch (orderErr: any) {
+      console.warn('[GharSansar Orders] Order submission failed:', orderErr.message);
+      const errMsg = orderErr.response?.data?.error || orderErr.response?.data?.message || orderErr.message || 'Unable to place order. Please check your internet connection.';
+      return {
+        success: false,
+        error: errMsg,
+      };
     }
-
-    // 3. Handle live server response
-    if (res && res.ok && (data?.success || data?.order)) {
-      const confirmedOrder = data.order || data;
-      const confirmedId = confirmedOrder.id || confirmedOrder.orderNumber || fallbackOrderId;
-      const newOrderObj = { ...localOrder, ...confirmedOrder, id: confirmedId };
-
-      console.log('[GharSansar Orders] Successfully saved on live backend with ID:', confirmedId);
-
-      setOrders(prev => [newOrderObj, ...prev.filter(o => o.id !== confirmedId)]);
-      try {
-        const stored = await AsyncStorage.getItem('user_orders');
-        const current = stored ? JSON.parse(stored) : [];
-        await AsyncStorage.setItem('user_orders', JSON.stringify([newOrderObj, ...current.filter((o: any) => o.id !== confirmedId)]));
-      } catch { }
-
-      // Refresh orders from server to ensure perfect sync
-      fetchOrdersForUser();
-      if (authToken) {
-        fetchUserCart(authToken);
-      }
-      return { success: true, orderId: confirmedId };
-    }
-
-    // 4. Offline fallback if remote server was unreachable
-    console.warn('[GharSansar Orders] Server unreachable or returned error, persisting locally.');
-    setOrders(prev => [localOrder, ...prev]);
-    try {
-      const stored = await AsyncStorage.getItem('user_orders');
-      const current = stored ? JSON.parse(stored) : [];
-      await AsyncStorage.setItem('user_orders', JSON.stringify([localOrder, ...current]));
-    } catch { }
-    return { success: true, orderId: fallbackOrderId };
   };
 
   // Sync general products load with initial paginated feed

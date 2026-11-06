@@ -126,6 +126,7 @@ const ProductDetailView: React.FC = () => {
     user,
     currentAddress,
     saveShippingAddress,
+    placeOrder,
     setActiveTab,
   } = useMobileApp();
 
@@ -327,15 +328,66 @@ const ProductDetailView: React.FC = () => {
     } catch {}
 
     const orderQty = quantity > 0 ? quantity : (isReturnGift ? 50 : 1);
+    const itemPrice = Number(product.finalPrice !== undefined ? product.finalPrice : product.price) || 0;
+    const itemTotal = itemPrice * orderQty;
     const deliveryAddressStr = `${addr.address}, ${addr.city}, ${addr.state || ''} - ${addr.zipCode}`;
 
-    await sendProductWhatsAppEnquiry({
-      product,
-      quantity: orderQty,
-      customerName: addr.name || user?.name,
-      customerPhone: addr.phone || user?.phone,
-      deliveryAddress: deliveryAddressStr,
-    });
+    // 1. Submit order to backend FIRST (Requirement 2)
+    const orderPayload = {
+      customer: {
+        firstName: (addr.name || user?.name || 'Customer').split(' ')[0],
+        lastName: (addr.name || user?.name || '').split(' ').slice(1).join(' ') || '',
+        email: user?.email || 'customer@gharsansar.website',
+        phone: addr.phone || user?.phone || '9492664870',
+        address: addr.address,
+        city: addr.city,
+        state: addr.state || 'Andhra Pradesh',
+        zipCode: addr.zipCode,
+        country: 'India',
+        notes: 'Product Page WhatsApp Order'
+      },
+      items: [
+        {
+          productId: String(product.id),
+          name: product.title || product.name || 'Product',
+          price: itemPrice,
+          quantity: orderQty,
+          image: product.image || '',
+          selectedSize: 'Standard',
+          selectedColor: '',
+        }
+      ],
+      subtotal: itemTotal,
+      shipping: 0,
+      tax: Math.round(itemTotal * 0.18),
+      discount: 0,
+      total: itemTotal,
+      paymentStatus: 'pending',
+      paymentMethod: 'whatsapp',
+      paymentId: '',
+      notes: `Single Product WhatsApp Order`
+    };
+
+    try {
+      const res = await placeOrder(orderPayload);
+      if (res.success && (res.orderId || res.orderNumber)) {
+        const officialOrderNum = res.orderNumber || res.orderId;
+
+        // 2. Open WhatsApp with official order details (Requirement 2)
+        await sendProductWhatsAppEnquiry({
+          product,
+          quantity: orderQty,
+          orderId: officialOrderNum,
+          customerName: addr.name || user?.name,
+          customerPhone: addr.phone || user?.phone,
+          deliveryAddress: deliveryAddressStr,
+        });
+      } else {
+        Alert.alert('Order Failed', res.error || 'Could not record order on the server. Please try again.');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Unable to place order.');
+    }
   };
 
   const handleWhatsAppOrder = async () => {

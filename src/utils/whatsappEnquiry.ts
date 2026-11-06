@@ -44,20 +44,21 @@ export const openWhatsApp = async (message: string, phoneNumber = ADMIN_WHATSAPP
 export const sendProductWhatsAppEnquiry = async (params: {
   product: { id: string | number; title?: string; name?: string; price: number; image?: string; category?: string };
   quantity?: number;
+  orderId?: string;
   selectedSize?: string;
   selectedColor?: string;
   customerName?: string;
   customerPhone?: string;
   deliveryAddress?: string;
 }) => {
-  const { product, quantity = 1, selectedSize, selectedColor, customerName, customerPhone, deliveryAddress } = params;
-  const orderId = generateOrderId();
+  const { product, quantity = 1, orderId, selectedSize, selectedColor, customerName, customerPhone, deliveryAddress } = params;
+  const finalOrderId = orderId || generateOrderId();
   const productName = product.name || product.title || 'Product';
   const total = product.price * quantity;
 
-  let msg = `🛍️ *NEW PRODUCT ENQUIRY / ORDER - GHAR SANSAR*\n`;
+  let msg = `🛍️ *NEW PRODUCT ORDER - GHAR SANSAR*\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `📋 *Ref ID:* ${orderId}\n`;
+  msg += `📋 *Official Order No:* ${finalOrderId}\n`;
   msg += `📅 *Date:* ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}\n\n`;
 
   msg += `📦 *PRODUCT DETAILS*\n`;
@@ -122,18 +123,19 @@ export const sendInteriorWhatsAppEnquiry = async (params: {
  * 3. Full Cart Order Enquiry Template
  */
 export const sendCartWhatsAppOrder = async (params: {
+  orderId?: string;
   items: Array<{ name: string; quantity: number; price: number; selectedSize?: string; image?: string }>;
   subtotal: number;
   deliveryCharge: number;
   grandTotal: number;
   customer: { name?: string; phone?: string; address?: string };
 }) => {
-  const { items, subtotal, deliveryCharge, grandTotal, customer } = params;
-  const orderId = generateOrderId();
+  const { orderId, items, subtotal, deliveryCharge, grandTotal, customer } = params;
+  const finalOrderId = orderId || generateOrderId();
 
   let msg = `🛍️ *NEW CART ORDER - GHAR SANSAR MOBILE APP*\n`;
   msg += `━━━━━━━━━━━━━━━━━━━━━\n`;
-  msg += `📋 *Order ID:* ${orderId}\n`;
+  msg += `📋 *Official Order No:* ${finalOrderId}\n`;
   msg += `📍 *Delivery Address:* ${customer.address || 'To be shared'}\n`;
   msg += `📞 *Contact:* ${customer.phone || 'Customer Phone'}\n\n`;
 

@@ -209,7 +209,7 @@ const CartView: React.FC = () => {
 
     if (res.success) {
       selectedItems.forEach(item => updateCartQuantity(item.product.id, -item.quantity));
-      setOrderSuccessData({ orderId: res.orderId || 'GS-ORD' });
+      setOrderSuccessData({ orderId: res.orderNumber || res.orderId || 'GS-ORD' });
     } else {
       Alert.alert('Order Failed', res.error || 'Failed to place order.');
     }
@@ -231,30 +231,85 @@ const CartView: React.FC = () => {
       return;
     }
 
-    const formattedItems = itemsToOrder.map((item) => ({
-      name: item.product.name || item.product.title,
-      quantity: item.quantity,
-      price: item.product.price,
-      image: item.product.image,
-    }));
+    setCheckoutLoading(true);
 
     const itemsSubtotal = itemsToOrder.reduce((acc, item) => acc + (item.product.price * item.quantity), 0);
     const deliveryCharge = 0; // Free Express Delivery
     const orderGrandTotal = Math.max(0, itemsSubtotal - couponDiscount);
-
     const customerAddressStr = `${addr.address}, ${addr.city}, ${addr.state || ''} - ${addr.zipCode}`;
 
-    await sendCartWhatsAppOrder({
-      items: formattedItems,
-      subtotal: itemsSubtotal,
-      deliveryCharge,
-      grandTotal: orderGrandTotal,
+    // 1. Submit order to backend FIRST (Requirement 2)
+    const orderPayload = {
       customer: {
-        name: addr.name || user?.name,
-        phone: addr.phone || user?.phone,
-        address: customerAddressStr,
+        firstName: (addr.name || user?.name || 'Customer').split(' ')[0],
+        lastName: (addr.name || user?.name || '').split(' ').slice(1).join(' ') || '',
+        email: user?.email || 'customer@gharsansar.website',
+        phone: addr.phone || user?.phone || '9492664870',
+        address: addr.address,
+        city: addr.city,
+        state: addr.state || 'Andhra Pradesh',
+        zipCode: addr.zipCode,
+        country: 'India',
+        notes: appliedCoupon ? `Coupon applied: ${appliedCoupon}` : 'Mobile App WhatsApp Order'
       },
-    });
+      items: itemsToOrder.map((item) => ({
+        productId: String(item.product.id),
+        name: item.product.name || item.product.title,
+        price: Number(item.product.finalPrice !== undefined ? item.product.finalPrice : item.product.price) || 0,
+        quantity: item.quantity,
+        image: item.product.image || '',
+        selectedSize: (item as any).selectedSize || 'Standard',
+        selectedColor: (item as any).selectedColor || '',
+      })),
+      subtotal: itemsSubtotal,
+      shipping: deliveryCharge,
+      tax: Math.round(orderGrandTotal * 0.18),
+      discount: couponDiscount,
+      total: orderGrandTotal,
+      paymentStatus: 'pending',
+      paymentMethod: 'whatsapp',
+      paymentId: '',
+      notes: 'Mobile App WhatsApp Order'
+    };
+
+    try {
+      const res = await placeOrder(orderPayload);
+      setCheckoutLoading(false);
+
+      if (res.success && (res.orderId || res.orderNumber)) {
+        const officialOrderNum = res.orderNumber || res.orderId || 'GS-ORD';
+
+        // 2. Clear only successfully ordered items from cart (Requirement 5)
+        itemsToOrder.forEach(item => updateCartQuantity(item.product.id, -item.quantity));
+
+        // 3. Open WhatsApp with official order details (Requirement 2)
+        const formattedItems = itemsToOrder.map((item) => ({
+          name: item.product.name || item.product.title,
+          quantity: item.quantity,
+          price: item.product.price,
+          image: item.product.image,
+          selectedSize: (item as any).selectedSize,
+        }));
+
+        await sendCartWhatsAppOrder({
+          orderId: officialOrderNum,
+          items: formattedItems,
+          subtotal: itemsSubtotal,
+          deliveryCharge,
+          grandTotal: orderGrandTotal,
+          customer: {
+            name: addr.name || user?.name,
+            phone: addr.phone || user?.phone,
+            address: customerAddressStr,
+          },
+        });
+      } else {
+        Alert.alert('Order Placement Failed', res.error || 'Could not record order on the server. Please try again.');
+      }
+    } catch (err: any) {
+      setCheckoutLoading(false);
+      Alert.alert('Error', err.message || 'Network error occurred while placing order.');
+    }
   };
 
   const handleWhatsAppCartOrder = async () => {
