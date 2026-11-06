@@ -19,6 +19,7 @@ import { PremiumImage } from '../components/PremiumImage';
 import EmptyState from '../components/EmptyState';
 import { tokens } from '../theme/tokens';
 import { KeyboardSafeScrollView } from '../components/KeyboardSafeScrollView';
+import { sendCartWhatsAppOrder } from '../utils/whatsappEnquiry';
 
 const CartView: React.FC = () => {
   const {
@@ -199,6 +200,43 @@ const CartView: React.FC = () => {
     } else {
       Alert.alert('Order Failed', res.error || 'Failed to place order.');
     }
+  };
+
+  const handleWhatsAppCartOrder = async () => {
+    const activeItems = cart.filter((i) => i.selected);
+    const itemsToOrder = activeItems.length > 0 ? activeItems : cart;
+
+    if (itemsToOrder.length === 0) {
+      Alert.alert('Empty Bag', 'Please add items to your shopping bag to order via WhatsApp.');
+      return;
+    }
+
+    const formattedItems = itemsToOrder.map((item) => ({
+      name: item.product.name || item.product.title,
+      quantity: item.quantity,
+      price: item.product.price,
+      image: item.product.image,
+    }));
+
+    const itemsSubtotal = itemsToOrder.reduce((acc, item) => acc + (item.product.price * item.quantity), 0);
+    const deliveryCharge = 0; // Free Express Delivery
+    const orderGrandTotal = Math.max(0, itemsSubtotal - couponDiscount);
+
+    const customerAddressStr = currentAddress
+      ? `${currentAddress.address}, ${currentAddress.city}, ${currentAddress.state} - ${currentAddress.zipCode}`
+      : undefined;
+
+    await sendCartWhatsAppOrder({
+      items: formattedItems,
+      subtotal: itemsSubtotal,
+      deliveryCharge,
+      grandTotal: orderGrandTotal,
+      customer: {
+        name: user?.name,
+        phone: user?.phone,
+        address: customerAddressStr,
+      },
+    });
   };
 
   const handleCheckout = () => {
@@ -650,6 +688,16 @@ const CartView: React.FC = () => {
                   </>
                 )}
               </TouchableOpacity>
+
+              {/* WhatsApp Alternative Order Button */}
+              <TouchableOpacity
+                style={styles.whatsappCheckoutBtn}
+                activeOpacity={0.88}
+                onPress={handleWhatsAppCartOrder}
+              >
+                <FontAwesome name="whatsapp" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.whatsappCheckoutBtnText}>ORDER VIA WHATSAPP</Text>
+              </TouchableOpacity>
             </View>
 
             {/* Trust Badges */}
@@ -678,26 +726,36 @@ const CartView: React.FC = () => {
               <Text style={styles.checkoutTotalPrice}>₹{formatCurrency(finalTotal)}</Text>
             </View>
 
-            <TouchableOpacity
-              style={[
-                styles.checkoutButton,
-                (selectedCount === 0 || checkoutLoading) && styles.checkoutButtonDisabled,
-              ]}
-              activeOpacity={0.85}
-              onPress={handleCheckout}
-              disabled={checkoutLoading}
-            >
-              {checkoutLoading ? (
-                <ActivityIndicator color="#FFFFFF" size="small" />
-              ) : (
-                <>
-                  <Text style={styles.checkoutButtonText}>
-                    {selectedCount === 0 ? 'Select Items' : `Secure Checkout (${selectedCount})`}
-                  </Text>
-                  <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
-                </>
-              )}
-            </TouchableOpacity>
+            <View style={styles.checkoutBarActionRow}>
+              <TouchableOpacity
+                style={styles.checkoutWhatsAppIconBtn}
+                activeOpacity={0.85}
+                onPress={handleWhatsAppCartOrder}
+              >
+                <FontAwesome name="whatsapp" size={22} color="#FFFFFF" />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.checkoutButton,
+                  (selectedCount === 0 || checkoutLoading) && styles.checkoutButtonDisabled,
+                ]}
+                activeOpacity={0.85}
+                onPress={handleCheckout}
+                disabled={checkoutLoading}
+              >
+                {checkoutLoading ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <>
+                    <Text style={styles.checkoutButtonText}>
+                      {selectedCount === 0 ? 'Select Items' : `Secure Checkout (${selectedCount})`}
+                    </Text>
+                    <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       )}
@@ -938,6 +996,19 @@ const CartView: React.FC = () => {
                 <Feather name="arrow-right" size={16} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
+
+            {/* Alternative Order via WhatsApp */}
+            <TouchableOpacity
+              style={styles.confirmWhatsAppBtn}
+              onPress={() => {
+                setShowConfirmModal(false);
+                handleWhatsAppCartOrder();
+              }}
+              activeOpacity={0.88}
+            >
+              <FontAwesome name="whatsapp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.confirmWhatsAppBtnText}>Order on WhatsApp</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1491,6 +1562,23 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     letterSpacing: 0.4,
   },
+  whatsappCheckoutBtn: {
+    backgroundColor: '#25D366',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: tokens.radius.button,
+    width: '100%',
+    marginTop: 10,
+    ...tokens.shadows.button,
+  },
+  whatsappCheckoutBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
 
   // Trust Row
   trustRow: {
@@ -1567,6 +1655,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
     letterSpacing: 0.5,
+  },
+  checkoutBarActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  checkoutWhatsAppIconBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: tokens.radius.button,
+    backgroundColor: '#25D366',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...tokens.shadows.subtle,
   },
   modalOverlay: {
     flex: 1,
@@ -1877,6 +1979,22 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  confirmWhatsAppBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#25D366',
+    borderRadius: 12,
+    height: 46,
+    marginTop: 10,
+    ...tokens.shadows.subtle,
+  },
+  confirmWhatsAppBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
 
   // Success Modal

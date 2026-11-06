@@ -23,6 +23,7 @@ import { KeyboardSafeScrollView } from '../components/KeyboardSafeScrollView';
 import Svg, { Path, Circle } from 'react-native-svg';
 
 import { BACKEND_URL } from '../config/api';
+import { sendProductWhatsAppEnquiry } from '../utils/whatsappEnquiry';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -121,6 +122,7 @@ const ProductDetailView: React.FC = () => {
     favorites,
     isAuthenticated,
     user,
+    currentAddress,
     setActiveTab,
   } = useMobileApp();
 
@@ -297,6 +299,26 @@ const ProductDetailView: React.FC = () => {
     } else {
       updateCartQuantity(product.id, -1);
     }
+  };
+
+  const handleWhatsAppOrder = async () => {
+    if (!product) return;
+    try {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    } catch {}
+
+    const orderQty = quantity > 0 ? quantity : (isReturnGift ? 50 : 1);
+    const deliveryAddressStr = currentAddress
+      ? `${currentAddress.address}, ${currentAddress.city}, ${currentAddress.state} - ${currentAddress.zipCode}`
+      : undefined;
+
+    await sendProductWhatsAppEnquiry({
+      product,
+      quantity: orderQty,
+      customerName: user?.name,
+      customerPhone: user?.phone,
+      deliveryAddress: deliveryAddressStr,
+    });
   };
 
   const handleCheckPincode = async () => {
@@ -660,6 +682,22 @@ const ProductDetailView: React.FC = () => {
           )}
         </View>
 
+        {/* DIRECT WHATSAPP ORDER & INQUIRY BANNER */}
+        <TouchableOpacity
+          style={styles.whatsappFullBannerBtn}
+          activeOpacity={0.88}
+          onPress={handleWhatsAppOrder}
+        >
+          <View style={styles.whatsappIconCircle}>
+            <FontAwesome name="whatsapp" size={22} color="#FFFFFF" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.whatsappBannerTitle}>Direct Order & Enquiry on WhatsApp</Text>
+            <Text style={styles.whatsappBannerSubtitle}>Chat with store team for instant confirmation & delivery</Text>
+          </View>
+          <Feather name="chevron-right" size={18} color="#15803D" />
+        </TouchableOpacity>
+
         {/* 7. SPECIFICATIONS & CARE ACCORDION */}
         <View style={styles.accordionContainer}>
           <TouchableOpacity
@@ -776,12 +814,22 @@ const ProductDetailView: React.FC = () => {
               activeOpacity={0.85}
               onPress={handleAddToCart}
             >
-              <Feather name="shopping-bag" size={16} color="#FFFFFF" />
+              <Feather name="shopping-bag" size={15} color="#FFFFFF" />
               <Text style={styles.addToCartText}>
-                {isReturnGift ? 'Add to Bag (Min 50 pcs)' : 'Add to Bag'}
+                {isReturnGift ? 'Add to Bag (Min 50)' : 'Add to Bag'}
               </Text>
             </TouchableOpacity>
           )}
+
+          {/* Direct Order via WhatsApp Action Button */}
+          <TouchableOpacity
+            style={styles.whatsappOrderBtn}
+            activeOpacity={0.85}
+            onPress={handleWhatsAppOrder}
+          >
+            <FontAwesome name="whatsapp" size={18} color="#FFFFFF" />
+            <Text style={styles.whatsappOrderBtnText}>WhatsApp</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -1422,16 +1470,61 @@ const styles = StyleSheet.create({
   purchaseButtonsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
   },
   addToCartBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     backgroundColor: tokens.colors.primary,
     paddingVertical: 12,
-    paddingHorizontal: 22,
+    paddingHorizontal: 14,
     borderRadius: tokens.radius.button,
+  },
+  whatsappOrderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#25D366',
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: tokens.radius.button,
+    ...tokens.shadows.subtle,
+  },
+  whatsappOrderBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.2,
+  },
+  whatsappFullBannerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1.2,
+    borderColor: '#86EFAC',
+    borderRadius: tokens.radius.card,
+    padding: 12,
+    marginTop: 14,
+    gap: 12,
+  },
+  whatsappIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#25D366',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  whatsappBannerTitle: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#14532D',
+  },
+  whatsappBannerSubtitle: {
+    fontSize: 11,
+    color: '#15803D',
+    marginTop: 2,
   },
   detailStepperContainer: {
     flexDirection: 'row',

@@ -2,6 +2,16 @@ import React from 'react';
 import { StyleSheet, View, Text, ScrollView, TouchableOpacity } from 'react-native';
 import { colors, radius, spacing, shadows } from '../theme/tokens';
 import { PremiumImage } from './PremiumImage';
+import { normalizeImageUrl } from '../config/api';
+
+const getCategoryThumbnail = (cat: CategoryItem): string => {
+  if (cat.name?.toLowerCase().includes('cello')) {
+    if (!cat.image || cat.image.includes('sonu_steel_products') || cat.image.includes('sonu_eliza')) {
+      return normalizeImageUrl('/products/cello/Complete Blue Floral Cello Dinnerware Set.webp');
+    }
+  }
+  return cat.image || '';
+};
 
 interface CategoryItem {
   name: string;
@@ -47,7 +57,7 @@ export const CategoryCarousel: React.FC<CategoryCarouselProps> = React.memo(({
               isSelected && styles.imageWrapperSelected
             ]}>
               <PremiumImage
-                uri={cat.image || ''}
+                uri={getCategoryThumbnail(cat)}
                 product={{ id: cat.name, title: cat.name, category: cat.name }}
                 style={styles.image}
                 contentFit="contain"
