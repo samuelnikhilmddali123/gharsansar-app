@@ -21,7 +21,6 @@ import { CategoryCarousel } from '../components/CategoryCarousel';
 import { SectionHeader } from '../components/SectionHeader';
 import { FlashSaleTimer } from '../components/FlashSaleTimer';
 import { ProductCard } from '../components/ProductCard';
-import { InteriorDesignBanner } from '../components/InteriorDesignBanner';
 
 const { width: screenWidth } = Dimensions.get('window');
 const GRID_CARD_WIDTH = Math.floor((screenWidth - (spacing.pageHorizontal * 2) - 12) / 2);
@@ -406,9 +405,6 @@ export default function HomeView() {
             </View>
           ))}
 
-
-          {/* 7. INTERIOR DESIGN & CONSULTATION BANNER */}
-          <InteriorDesignBanner />
 
           {/* 8. JUST FOR YOU / RECOMMENDED GRID */}
           {recommendedProducts.length > 0 && (

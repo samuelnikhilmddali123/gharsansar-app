@@ -17,7 +17,6 @@ import { ProductCard } from '../components/ProductCard';
 import { FeaturedCollectionCard } from '../components/FeaturedCollectionCard';
 import { PremiumImage } from '../components/PremiumImage';
 import { KeyboardSafeScrollView } from '../components/KeyboardSafeScrollView';
-import { InteriorDesignBanner } from '../components/InteriorDesignBanner';
 
 const { width: screenWidth } = Dimensions.get('window');
 
@@ -276,9 +275,6 @@ export default function ExploreView() {
                 </ScrollView>
               </View>
             )}
-
-            {/* INTERIOR DESIGN & BESPOKE STYLING BANNER */}
-            <InteriorDesignBanner />
           </>
         )}
 
