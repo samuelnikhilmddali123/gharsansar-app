@@ -1,11 +1,29 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useRef } from 'react';
 import { Platform, Linking, AppState, AppStateStatus } from 'react-native';
 import * as WebBrowser from 'expo-web-browser';
-import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image as ExpoImage } from 'expo-image';
 import * as Network from 'expo-network';
+
+// Safe dynamic import for expo-notifications to prevent native module crashes (e.g. ExpoApplication)
+let Notifications: any = null;
+try {
+  Notifications = require('expo-notifications');
+  if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowAlert: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
+  }
+} catch (e) {
+  console.warn('[GharSansar Notifications] expo-notifications native module not available in this client:', e);
+}
 import {
   loadProductsFromCache,
   saveProductsToCache,
@@ -51,19 +69,6 @@ export const extractAuthCodeFromUrl = (url: string): string | null => {
   }
 };
 
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowAlert: true,
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-} catch (e) {
-  console.warn('Notifications handler not supported in current environment', e);
-}
 
 export interface Product {
   id: string;
@@ -1277,6 +1282,9 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
   // Run on mount
   useEffect(() => {
     const registerForPushNotificationsAsync = async () => {
+      if (!Notifications || typeof Notifications.getPermissionsAsync !== 'function') {
+        return;
+      }
       try {
         let token;
         if (Device.isDevice) {
@@ -1520,12 +1528,14 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
 
     // Add foreground notification listener
     let notificationListener: any = null;
-    try {
-      notificationListener = Notifications.addNotificationReceivedListener(notification => {
-        fetchNotifications();
-      });
-    } catch (e) {
-      console.warn('Foreground notification listener unavailable:', e);
+    if (Notifications && typeof Notifications.addNotificationReceivedListener === 'function') {
+      try {
+        notificationListener = Notifications.addNotificationReceivedListener((notification: any) => {
+          fetchNotifications();
+        });
+      } catch (e) {
+        console.warn('Foreground notification listener unavailable:', e);
+      }
     }
 
     registerUnauthorizedHandler(() => {
