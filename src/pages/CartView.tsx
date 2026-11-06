@@ -51,6 +51,7 @@ const CartView: React.FC = () => {
   const [addrCity, setAddrCity] = useState(currentAddress?.city || '');
   const [addrState, setAddrState] = useState(currentAddress?.state || '');
   const [addrZip, setAddrZip] = useState(currentAddress?.zipCode || '');
+  const [pendingWhatsAppOrder, setPendingWhatsAppOrder] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
   const [orderSuccessData, setOrderSuccessData] = useState<{ orderId: string } | null>(null);
@@ -106,31 +107,43 @@ const CartView: React.FC = () => {
   };
 
   const handleSaveAddress = async () => {
+    if (!addrName.trim()) {
+      Alert.alert('Name Required', 'Please enter recipient name.');
+      return;
+    }
+    if (!addrPhone.trim() || addrPhone.replace(/\D/g, '').length < 10) {
+      Alert.alert('Phone Required', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
     if (!addrStreet.trim()) {
-      Alert.alert('Required', 'Please enter your street address / house no.');
+      Alert.alert('Address Required', 'Please enter your street address / house no.');
       return;
     }
     if (!addrCity.trim()) {
-      Alert.alert('Required', 'Please enter your city.');
+      Alert.alert('City Required', 'Please enter your city.');
       return;
     }
     if (!addrZip.trim()) {
-      Alert.alert('Required', 'Please enter your postal pincode.');
+      Alert.alert('Pincode Required', 'Please enter your postal pincode.');
       return;
     }
-    await saveShippingAddress({
-      name: addrName.trim() || user?.name || (user as any)?.full_name || 'Customer',
-      phone: addrPhone.trim() || user?.phone || '',
+
+    const savedAddr = {
+      name: addrName.trim(),
+      phone: addrPhone.trim(),
       address: addrStreet.trim(),
       city: addrCity.trim(),
       state: addrState.trim() || 'Andhra Pradesh',
       zipCode: addrZip.trim(),
       isDefault: true,
-    });
+    };
+
+    await saveShippingAddress(savedAddr);
     setShowAddressModal(false);
-    const selectedItems = cart.filter((i) => i.selected);
-    if (selectedItems.length > 0) {
-      setShowConfirmModal(true);
+
+    if (pendingWhatsAppOrder) {
+      setPendingWhatsAppOrder(false);
+      await sendWhatsAppCartOrderWithAddress(savedAddr);
     } else {
       Alert.alert('Address Saved', 'Your delivery address has been saved.');
     }
@@ -202,7 +215,14 @@ const CartView: React.FC = () => {
     }
   };
 
-  const handleWhatsAppCartOrder = async () => {
+  const sendWhatsAppCartOrderWithAddress = async (addr: {
+    name?: string;
+    phone?: string;
+    address: string;
+    city: string;
+    state?: string;
+    zipCode: string;
+  }) => {
     const activeItems = cart.filter((i) => i.selected);
     const itemsToOrder = activeItems.length > 0 ? activeItems : cart;
 
@@ -222,9 +242,7 @@ const CartView: React.FC = () => {
     const deliveryCharge = 0; // Free Express Delivery
     const orderGrandTotal = Math.max(0, itemsSubtotal - couponDiscount);
 
-    const customerAddressStr = currentAddress
-      ? `${currentAddress.address}, ${currentAddress.city}, ${currentAddress.state} - ${currentAddress.zipCode}`
-      : undefined;
+    const customerAddressStr = `${addr.address}, ${addr.city}, ${addr.state || ''} - ${addr.zipCode}`;
 
     await sendCartWhatsAppOrder({
       items: formattedItems,
@@ -232,11 +250,40 @@ const CartView: React.FC = () => {
       deliveryCharge,
       grandTotal: orderGrandTotal,
       customer: {
-        name: user?.name,
-        phone: user?.phone,
+        name: addr.name || user?.name,
+        phone: addr.phone || user?.phone,
         address: customerAddressStr,
       },
     });
+  };
+
+  const handleWhatsAppCartOrder = async () => {
+    const activeItems = cart.filter((i) => i.selected);
+    const itemsToOrder = activeItems.length > 0 ? activeItems : cart;
+
+    if (itemsToOrder.length === 0) {
+      Alert.alert('Empty Bag', 'Please select at least one item to order via WhatsApp.');
+      return;
+    }
+
+    if (
+      !currentAddress ||
+      !currentAddress.address?.trim() ||
+      !currentAddress.city?.trim() ||
+      !currentAddress.zipCode?.trim()
+    ) {
+      setPendingWhatsAppOrder(true);
+      setAddrName(currentAddress?.name || user?.name || '');
+      setAddrPhone(currentAddress?.phone || user?.phone || '');
+      setAddrStreet(currentAddress?.address || '');
+      setAddrCity(currentAddress?.city || '');
+      setAddrState(currentAddress?.state || 'Andhra Pradesh');
+      setAddrZip(currentAddress?.zipCode || '');
+      setShowAddressModal(true);
+      return;
+    }
+
+    await sendWhatsAppCartOrderWithAddress(currentAddress);
   };
 
   const handleCheckout = () => {
@@ -328,18 +375,16 @@ const CartView: React.FC = () => {
                     <Text style={styles.addressDeliverTo}>Deliver to:</Text>
                     <View style={styles.homeTag}>
                       <Text style={styles.homeTagText}>
-                        {!isAuthenticated
-                          ? 'GUEST'
-                          : (currentAddress?.name ? currentAddress.name.toUpperCase() : (user?.name ? user.name.toUpperCase() : 'DESTINATION'))}
+                        {currentAddress?.name
+                          ? currentAddress.name.toUpperCase()
+                          : (user?.name ? user.name.toUpperCase() : 'CUSTOMER')}
                       </Text>
                     </View>
                   </View>
                   <Text style={styles.addressLine} numberOfLines={1}>
-                    {!isAuthenticated
-                      ? 'Please sign in to view or enter delivery address'
-                      : (currentAddress && currentAddress.address?.trim()
-                          ? `${currentAddress.address}, ${currentAddress.city} - ${currentAddress.zipCode}`
-                          : 'No address set — tap Add to enter shipping address')}
+                    {currentAddress && currentAddress.address?.trim()
+                      ? `${currentAddress.address}, ${currentAddress.city} - ${currentAddress.zipCode}`
+                      : 'No address set — tap Add to enter delivery address'}
                   </Text>
                 </View>
               </View>
@@ -347,21 +392,18 @@ const CartView: React.FC = () => {
                 style={styles.changeAddressBtn}
                 activeOpacity={0.7}
                 onPress={() => {
-                  if (!isAuthenticated) {
-                    setActiveTab('account');
-                    return;
-                  }
+                  setPendingWhatsAppOrder(false);
                   setAddrName(currentAddress?.name || user?.name || '');
                   setAddrPhone(currentAddress?.phone || user?.phone || '');
                   setAddrStreet(currentAddress?.address || '');
                   setAddrCity(currentAddress?.city || '');
-                  setAddrState(currentAddress?.state || '');
+                  setAddrState(currentAddress?.state || 'Andhra Pradesh');
                   setAddrZip(currentAddress?.zipCode || '');
                   setShowAddressModal(true);
                 }}
               >
                 <Text style={styles.changeAddressText}>
-                  {!isAuthenticated ? 'Sign In' : (currentAddress?.address?.trim() ? 'Change' : 'Add')}
+                  {currentAddress?.address?.trim() ? 'Change' : 'Add'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -665,38 +707,22 @@ const CartView: React.FC = () => {
                 </View>
               )}
 
-              {/* Primary In-Card Checkout Button (Proceed to Buy) */}
+              {/* Direct Order on WhatsApp Button */}
               <TouchableOpacity
                 style={[
-                  styles.proceedToBuyBtn,
-                  (selectedCount === 0 || checkoutLoading) && styles.proceedToBuyBtnDisabled,
+                  styles.whatsappCheckoutBtn,
+                  selectedCount === 0 && styles.whatsappCheckoutBtnDisabled,
                 ]}
-                activeOpacity={0.85}
-                onPress={handleCheckout}
-                disabled={checkoutLoading || selectedCount === 0}
-              >
-                {checkoutLoading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <>
-                    <Text style={styles.proceedToBuyBtnText}>
-                      {selectedCount === 0
-                        ? 'Select Items to Buy'
-                        : `Proceed to Buy (${selectedCount} ${selectedCount === 1 ? 'item' : 'items'})`}
-                    </Text>
-                    <Feather name="arrow-right" size={17} color="#FFFFFF" style={{ marginLeft: 8 }} />
-                  </>
-                )}
-              </TouchableOpacity>
-
-              {/* WhatsApp Alternative Order Button */}
-              <TouchableOpacity
-                style={styles.whatsappCheckoutBtn}
                 activeOpacity={0.88}
                 onPress={handleWhatsAppCartOrder}
+                disabled={selectedCount === 0}
               >
-                <FontAwesome name="whatsapp" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.whatsappCheckoutBtnText}>ORDER VIA WHATSAPP</Text>
+                <FontAwesome name="whatsapp" size={22} color="#FFFFFF" style={{ marginRight: 10 }} />
+                <Text style={styles.whatsappCheckoutBtnText}>
+                  {selectedCount === 0
+                    ? 'SELECT ITEMS TO ORDER'
+                    : `ORDER VIA WHATSAPP (${selectedCount} ${selectedCount === 1 ? 'ITEM' : 'ITEMS'})`}
+                </Text>
               </TouchableOpacity>
             </View>
 
@@ -708,13 +734,13 @@ const CartView: React.FC = () => {
               </View>
               <View style={styles.trustDot} />
               <View style={styles.trustItem}>
-                <Feather name="lock" size={16} color={tokens.colors.accent} />
-                <Text style={styles.trustText}>Secure Payments</Text>
+                <FontAwesome name="whatsapp" size={16} color="#25D366" />
+                <Text style={styles.trustText}>WhatsApp Order</Text>
               </View>
               <View style={styles.trustDot} />
               <View style={styles.trustItem}>
-                <Feather name="refresh-cw" size={16} color={tokens.colors.accent} />
-                <Text style={styles.trustText}>Easy Returns</Text>
+                <Feather name="truck" size={16} color={tokens.colors.accent} />
+                <Text style={styles.trustText}>Fast Delivery</Text>
               </View>
             </View>
           </KeyboardSafeScrollView>
@@ -726,36 +752,21 @@ const CartView: React.FC = () => {
               <Text style={styles.checkoutTotalPrice}>₹{formatCurrency(finalTotal)}</Text>
             </View>
 
-            <View style={styles.checkoutBarActionRow}>
-              <TouchableOpacity
-                style={styles.checkoutWhatsAppIconBtn}
-                activeOpacity={0.85}
-                onPress={handleWhatsAppCartOrder}
-              >
-                <FontAwesome name="whatsapp" size={22} color="#FFFFFF" />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.checkoutButton,
-                  (selectedCount === 0 || checkoutLoading) && styles.checkoutButtonDisabled,
-                ]}
-                activeOpacity={0.85}
-                onPress={handleCheckout}
-                disabled={checkoutLoading}
-              >
-                {checkoutLoading ? (
-                  <ActivityIndicator color="#FFFFFF" size="small" />
-                ) : (
-                  <>
-                    <Text style={styles.checkoutButtonText}>
-                      {selectedCount === 0 ? 'Select Items' : `Secure Checkout (${selectedCount})`}
-                    </Text>
-                    <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
-                  </>
-                )}
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={[
+                styles.checkoutWhatsAppMainBtn,
+                selectedCount === 0 && styles.checkoutButtonDisabled,
+              ]}
+              activeOpacity={0.88}
+              onPress={handleWhatsAppCartOrder}
+              disabled={selectedCount === 0}
+            >
+              <FontAwesome name="whatsapp" size={22} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.checkoutWhatsAppMainBtnText}>
+                {selectedCount === 0 ? 'Select Items' : `Order on WhatsApp (${selectedCount})`}
+              </Text>
+              <Feather name="arrow-right" size={16} color="#FFFFFF" style={{ marginLeft: 6 }} />
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -774,10 +785,22 @@ const CartView: React.FC = () => {
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.modalTitle}>Delivery Address</Text>
-                <Text style={styles.modalSubtitle}>Where should we deliver your order?</Text>
+                <Text style={styles.modalTitle}>
+                  {pendingWhatsAppOrder ? 'Delivery Address Required' : 'Delivery Address'}
+                </Text>
+                <Text style={styles.modalSubtitle}>
+                  {pendingWhatsAppOrder
+                    ? 'Enter and save your address to place order on WhatsApp'
+                    : 'Where should we deliver your order?'}
+                </Text>
               </View>
-              <TouchableOpacity onPress={() => setShowAddressModal(false)} style={styles.closeBtn}>
+              <TouchableOpacity
+                onPress={() => {
+                  setShowAddressModal(false);
+                  setPendingWhatsAppOrder(false);
+                }}
+                style={styles.closeBtn}
+              >
                 <Feather name="x" size={20} color={tokens.colors.primary} />
               </TouchableOpacity>
             </View>
@@ -902,115 +925,23 @@ const CartView: React.FC = () => {
               />
 
               <TouchableOpacity
-                style={styles.saveAddressBtn}
+                style={[
+                  styles.saveAddressBtn,
+                  pendingWhatsAppOrder && styles.saveAddressBtnWhatsApp,
+                ]}
                 onPress={handleSaveAddress}
                 activeOpacity={0.85}
               >
-                <Text style={styles.saveAddressBtnText}>SAVE & DELIVER HERE</Text>
+                {pendingWhatsAppOrder && (
+                  <FontAwesome name="whatsapp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                )}
+                <Text style={styles.saveAddressBtnText}>
+                  {pendingWhatsAppOrder ? 'SAVE ADDRESS & ORDER ON WHATSAPP' : 'SAVE & DELIVER HERE'}
+                </Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
         </KeyboardAvoidingView>
-      </Modal>
-
-      {/* 9. Modern Luxury Confirm Order Modal */}
-      <Modal
-        visible={showConfirmModal}
-        animationType="fade"
-        transparent={true}
-        onRequestClose={() => setShowConfirmModal(false)}
-      >
-        <View style={styles.confirmModalOverlay}>
-          <View style={styles.confirmModalCard}>
-            {/* Top Icon & Title */}
-            <View style={styles.confirmModalHeader}>
-              <View style={styles.confirmModalIconCircle}>
-                <Feather name="check-circle" size={26} color="#059669" />
-              </View>
-              <Text style={styles.confirmModalTitle}>Confirm Order</Text>
-              <Text style={styles.confirmModalSubtitle}>
-                Review your delivery & payment summary
-              </Text>
-            </View>
-
-            {/* Address Box */}
-            <View style={styles.confirmAddressBox}>
-              <View style={styles.confirmAddressHeader}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                  <Feather name="map-pin" size={14} color={tokens.colors.primary} />
-                  <Text style={styles.confirmAddressLabel}>DELIVERING TO</Text>
-                </View>
-                <TouchableOpacity
-                  onPress={() => {
-                    setShowConfirmModal(false);
-                    setShowAddressModal(true);
-                  }}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Text style={styles.confirmAddressChangeBtn}>Change</Text>
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.confirmAddressName}>
-                {currentAddress?.name || user?.name || 'Customer'}
-                {currentAddress?.phone ? ` • ${currentAddress.phone}` : ''}
-              </Text>
-              <Text style={styles.confirmAddressText} numberOfLines={2}>
-                {currentAddress?.address}, {currentAddress?.city}, {currentAddress?.state} - {currentAddress?.zipCode}
-              </Text>
-            </View>
-
-            {/* Order Details Summary Box */}
-            <View style={styles.confirmSummaryBox}>
-              <View style={styles.confirmSummaryRow}>
-                <Text style={styles.confirmSummaryLabel}>Total Items</Text>
-                <Text style={styles.confirmSummaryVal}>
-                  {selectedCount} {selectedCount === 1 ? 'item' : 'items'}
-                </Text>
-              </View>
-              <View style={styles.confirmSummaryRow}>
-                <Text style={styles.confirmSummaryLabel}>Shipping</Text>
-                <Text style={styles.confirmSummaryFree}>FREE Express Delivery</Text>
-              </View>
-              <View style={[styles.confirmSummaryRow, { borderTopWidth: 1, borderTopColor: '#E2E8F0', paddingTop: 10, marginTop: 4 }]}>
-                <Text style={styles.confirmTotalLabel}>Total to Pay</Text>
-                <Text style={styles.confirmTotalAmount}>₹{formatCurrency(finalTotal)}</Text>
-              </View>
-            </View>
-
-            {/* Action Buttons */}
-            <View style={styles.confirmActionsRow}>
-              <TouchableOpacity
-                style={styles.confirmCancelBtn}
-                onPress={() => setShowConfirmModal(false)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.confirmCancelText}>Cancel</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.confirmPlaceOrderBtn}
-                onPress={executeOrderPlacement}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.confirmPlaceOrderText}>Place Order</Text>
-                <Feather name="arrow-right" size={16} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-
-            {/* Alternative Order via WhatsApp */}
-            <TouchableOpacity
-              style={styles.confirmWhatsAppBtn}
-              onPress={() => {
-                setShowConfirmModal(false);
-                handleWhatsAppCartOrder();
-              }}
-              activeOpacity={0.88}
-            >
-              <FontAwesome name="whatsapp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
-              <Text style={styles.confirmWhatsAppBtnText}>Order on WhatsApp</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
       </Modal>
 
       {/* 10. Modern Luxury Order Success Modal */}
@@ -1637,38 +1568,28 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: tokens.colors.primary,
   },
-  checkoutButton: {
-    backgroundColor: tokens.colors.primary,
+  checkoutWhatsAppMainBtn: {
+    backgroundColor: '#25D366',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 14,
-    paddingHorizontal: 22,
+    paddingHorizontal: 20,
     borderRadius: tokens.radius.button,
-    minWidth: 180,
+    minWidth: 190,
+    ...tokens.shadows.button,
+  },
+  checkoutWhatsAppMainBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
   },
   checkoutButtonDisabled: {
     opacity: 0.5,
   },
-  checkoutButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#FFFFFF',
-    letterSpacing: 0.5,
-  },
-  checkoutBarActionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  checkoutWhatsAppIconBtn: {
-    width: 48,
-    height: 48,
-    borderRadius: tokens.radius.button,
-    backgroundColor: '#25D366',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...tokens.shadows.subtle,
+  whatsappCheckoutBtnDisabled: {
+    opacity: 0.5,
   },
   modalOverlay: {
     flex: 1,
@@ -1820,6 +1741,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginTop: 20,
     ...tokens.shadows.button,
+  },
+  saveAddressBtnWhatsApp: {
+    backgroundColor: '#25D366',
+    flexDirection: 'row',
   },
   saveAddressBtnText: {
     color: '#FFFFFF',

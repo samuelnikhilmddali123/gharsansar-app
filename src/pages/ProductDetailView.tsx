@@ -10,6 +10,8 @@ import {
   TextInput,
   Dimensions,
   Modal,
+  Platform,
+  KeyboardAvoidingView,
 } from 'react-native';
 import { Feather, FontAwesome, Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -123,11 +125,21 @@ const ProductDetailView: React.FC = () => {
     isAuthenticated,
     user,
     currentAddress,
+    saveShippingAddress,
     setActiveTab,
   } = useMobileApp();
 
   const insets = useSafeAreaInsets();
   const scrollViewRef = useRef<ScrollView>(null);
+
+  // Address Modal State for WhatsApp Direct Order
+  const [showAddressModal, setShowAddressModal] = useState(false);
+  const [addrName, setAddrName] = useState(currentAddress?.name || user?.name || '');
+  const [addrPhone, setAddrPhone] = useState(currentAddress?.phone || user?.phone || '');
+  const [addrStreet, setAddrStreet] = useState(currentAddress?.address || '');
+  const [addrCity, setAddrCity] = useState(currentAddress?.city || '');
+  const [addrState, setAddrState] = useState(currentAddress?.state || 'Andhra Pradesh');
+  const [addrZip, setAddrZip] = useState(currentAddress?.zipCode || '');
 
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [activeAccordion, setActiveAccordion] = useState<string | null>('specs');
@@ -301,24 +313,87 @@ const ProductDetailView: React.FC = () => {
     }
   };
 
-  const handleWhatsAppOrder = async () => {
+  const executeWhatsAppProductOrder = async (addr: {
+    name?: string;
+    phone?: string;
+    address: string;
+    city: string;
+    state?: string;
+    zipCode: string;
+  }) => {
     if (!product) return;
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     } catch {}
 
     const orderQty = quantity > 0 ? quantity : (isReturnGift ? 50 : 1);
-    const deliveryAddressStr = currentAddress
-      ? `${currentAddress.address}, ${currentAddress.city}, ${currentAddress.state} - ${currentAddress.zipCode}`
-      : undefined;
+    const deliveryAddressStr = `${addr.address}, ${addr.city}, ${addr.state || ''} - ${addr.zipCode}`;
 
     await sendProductWhatsAppEnquiry({
       product,
       quantity: orderQty,
-      customerName: user?.name,
-      customerPhone: user?.phone,
+      customerName: addr.name || user?.name,
+      customerPhone: addr.phone || user?.phone,
       deliveryAddress: deliveryAddressStr,
     });
+  };
+
+  const handleWhatsAppOrder = async () => {
+    if (!product) return;
+    if (
+      !currentAddress ||
+      !currentAddress.address?.trim() ||
+      !currentAddress.city?.trim() ||
+      !currentAddress.zipCode?.trim()
+    ) {
+      setAddrName(currentAddress?.name || user?.name || '');
+      setAddrPhone(currentAddress?.phone || user?.phone || '');
+      setAddrStreet(currentAddress?.address || '');
+      setAddrCity(currentAddress?.city || '');
+      setAddrState(currentAddress?.state || 'Andhra Pradesh');
+      setAddrZip(currentAddress?.zipCode || '');
+      setShowAddressModal(true);
+      return;
+    }
+
+    await executeWhatsAppProductOrder(currentAddress);
+  };
+
+  const handleSaveAddressAndOrder = async () => {
+    if (!addrName.trim()) {
+      Alert.alert('Name Required', 'Please enter recipient name.');
+      return;
+    }
+    if (!addrPhone.trim() || addrPhone.replace(/\D/g, '').length < 10) {
+      Alert.alert('Phone Required', 'Please enter a valid 10-digit mobile number.');
+      return;
+    }
+    if (!addrStreet.trim()) {
+      Alert.alert('Address Required', 'Please enter your delivery street address / house no.');
+      return;
+    }
+    if (!addrCity.trim()) {
+      Alert.alert('City Required', 'Please enter your city.');
+      return;
+    }
+    if (!addrZip.trim() || addrZip.replace(/\D/g, '').length < 6) {
+      Alert.alert('Pincode Required', 'Please enter a valid 6-digit postal pincode.');
+      return;
+    }
+
+    const savedAddr = {
+      name: addrName.trim(),
+      phone: addrPhone.trim(),
+      address: addrStreet.trim(),
+      city: addrCity.trim(),
+      state: addrState.trim() || 'Andhra Pradesh',
+      zipCode: addrZip.trim(),
+      isDefault: true,
+    };
+
+    await saveShippingAddress(savedAddr);
+    setShowAddressModal(false);
+    await executeWhatsAppProductOrder(savedAddr);
   };
 
   const handleCheckPincode = async () => {
@@ -921,6 +996,109 @@ const ProductDetailView: React.FC = () => {
             />
           </View>
         </View>
+      </Modal>
+
+      {/* Delivery Address Modal for Direct WhatsApp Order */}
+      <Modal
+        visible={showAddressModal}
+        animationType="slide"
+        transparent={true}
+        onRequestClose={() => setShowAddressModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.addressModalOverlay}
+        >
+          <View style={styles.addressModalContent}>
+            <View style={styles.addressModalHeader}>
+              <View>
+                <Text style={styles.addressModalTitle}>Delivery Address Required</Text>
+                <Text style={styles.addressModalSubtitle}>Enter and save your address to place WhatsApp order</Text>
+              </View>
+              <TouchableOpacity onPress={() => setShowAddressModal(false)} style={styles.addressCloseBtn}>
+                <Feather name="x" size={20} color={tokens.colors.primary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={styles.addressForm}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              <Text style={styles.addressFormLabel}>Recipient Name</Text>
+              <TextInput
+                style={styles.addressFormInput}
+                value={addrName}
+                onChangeText={setAddrName}
+                placeholder="Full Name"
+                placeholderTextColor="#9CA3AF"
+              />
+
+              <Text style={styles.addressFormLabel}>Contact Phone</Text>
+              <TextInput
+                style={styles.addressFormInput}
+                value={addrPhone}
+                onChangeText={setAddrPhone}
+                placeholder="10-digit mobile number"
+                placeholderTextColor="#9CA3AF"
+                keyboardType="phone-pad"
+              />
+
+              <Text style={styles.addressFormLabel}>Street Address / House No.</Text>
+              <TextInput
+                style={styles.addressFormInput}
+                value={addrStreet}
+                onChangeText={setAddrStreet}
+                placeholder="Flat / House No., Landmark, Street"
+                placeholderTextColor="#9CA3AF"
+              />
+
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <View style={{ flex: 1, marginRight: 8 }}>
+                  <Text style={styles.addressFormLabel}>City</Text>
+                  <TextInput
+                    style={styles.addressFormInput}
+                    value={addrCity}
+                    onChangeText={setAddrCity}
+                    placeholder="City"
+                    placeholderTextColor="#9CA3AF"
+                  />
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.addressFormLabel}>Postal Pincode</Text>
+                  <TextInput
+                    style={styles.addressFormInput}
+                    value={addrZip}
+                    onChangeText={setAddrZip}
+                    placeholder="e.g. 520001"
+                    placeholderTextColor="#9CA3AF"
+                    keyboardType="numeric"
+                  />
+                </View>
+              </View>
+
+              <Text style={styles.addressFormLabel}>State</Text>
+              <TextInput
+                style={styles.addressFormInput}
+                value={addrState}
+                onChangeText={setAddrState}
+                placeholder="State"
+                placeholderTextColor="#9CA3AF"
+              />
+
+              <TouchableOpacity
+                style={styles.addressSaveWhatsAppBtn}
+                onPress={handleSaveAddressAndOrder}
+                activeOpacity={0.85}
+              >
+                <FontAwesome name="whatsapp" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.addressSaveWhatsAppBtnText}>SAVE ADDRESS & ORDER ON WHATSAPP</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1665,6 +1843,87 @@ const styles = StyleSheet.create({
   zoomImage: {
     width: '100%',
     height: '100%',
+  },
+
+  // Address Modal for WhatsApp Direct Order
+  addressModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'flex-end',
+  },
+  addressModalContent: {
+    backgroundColor: tokens.colors.surface,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    height: '85%',
+    maxHeight: '90%',
+    paddingBottom: 24,
+    overflow: 'hidden',
+    ...tokens.shadows.card,
+  },
+  addressModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: tokens.spacing.lg,
+    paddingTop: tokens.spacing.lg,
+    paddingBottom: tokens.spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: tokens.colors.border,
+  },
+  addressModalTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: tokens.colors.primary,
+  },
+  addressModalSubtitle: {
+    fontSize: 12,
+    color: tokens.colors.textSecondary,
+    marginTop: 2,
+  },
+  addressCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: tokens.colors.surfaceSecondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressForm: {
+    padding: tokens.spacing.lg,
+  },
+  addressFormLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: tokens.colors.textSecondary,
+    marginBottom: 6,
+    marginTop: 10,
+  },
+  addressFormInput: {
+    backgroundColor: tokens.colors.surfaceSecondary,
+    borderRadius: tokens.radius.input,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 14,
+    color: tokens.colors.textPrimary,
+    borderWidth: 1,
+    borderColor: tokens.colors.border,
+  },
+  addressSaveWhatsAppBtn: {
+    backgroundColor: '#25D366',
+    flexDirection: 'row',
+    borderRadius: tokens.radius.button,
+    paddingVertical: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+    ...tokens.shadows.button,
+  },
+  addressSaveWhatsAppBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '800',
+    fontSize: 13,
+    letterSpacing: 0.5,
   },
 });
 
