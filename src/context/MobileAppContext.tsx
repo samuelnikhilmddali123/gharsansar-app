@@ -16,6 +16,8 @@ import {
   saveReturnGiftsToCache,
   loadCategoriesFromCache,
   saveCategoriesToCache,
+  loadBannersFromCache,
+  saveBannersToCache,
   isCacheExpired,
   clearProductCache,
 } from '../services/productCacheService';
@@ -624,19 +626,27 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
   };
 
-  // Fetch all banners
+  // Fetch all banners (with persistent cache backing)
   const fetchBanners = async () => {
-    setBannersLoading(true);
+    if (banners.length === 0) {
+      const cached = await loadBannersFromCache();
+      if (cached && cached.length > 0) {
+        setBanners(cached);
+        setBannersLoading(false);
+      }
+    }
     try {
       const data = await fetchWithCache(`${BACKEND_URL}/api/banners`);
-      const mappedBanners = (data || []).map((b: any) => ({
-        ...b,
-        image: b.image ? normalizeImageUrl(b.image) : b.image
-      }));
-      setBanners(mappedBanners);
+      if (Array.isArray(data) && data.length > 0) {
+        const mappedBanners = data.map((b: any) => ({
+          ...b,
+          image: b.image ? normalizeImageUrl(b.image) : b.image
+        }));
+        setBanners(mappedBanners);
+        await saveBannersToCache(mappedBanners);
+      }
     } catch (err) {
       console.warn('Failed to fetch banners from API:', err);
-      setBanners([]);
     } finally {
       setBannersLoading(false);
     }
@@ -1385,10 +1395,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
     const initializeData = async () => {
       // 1. Immediately restore cached catalog from local persistent storage (0ms instant display)
       try {
-        const [cachedCatalog, cachedGifts, cachedCats] = await Promise.all([
+        const [cachedCatalog, cachedGifts, cachedCats, cachedBanners] = await Promise.all([
           loadProductsFromCache(),
           loadReturnGiftsFromCache(),
-          loadCategoriesFromCache()
+          loadCategoriesFromCache(),
+          loadBannersFromCache()
         ]);
 
         if (cachedCatalog && cachedCatalog.products.length > 0) {
@@ -1406,6 +1417,11 @@ export const MobileAppProvider: React.FC<{ children: ReactNode }> = ({ children 
         if (cachedCats && cachedCats.length > 0) {
           setCategories(cachedCats);
           setCategoriesLoading(false);
+        }
+
+        if (cachedBanners && cachedBanners.length > 0) {
+          setBanners(cachedBanners);
+          setBannersLoading(false);
         }
       } catch (cacheErr) {
         console.warn('Failed restoring from local cache:', cacheErr);

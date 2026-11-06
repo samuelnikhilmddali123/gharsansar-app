@@ -9,6 +9,7 @@ export const CACHE_KEYS = {
   RETURN_GIFTS: '@ghar_sansar_return_gifts_cache_v2',
   CATEGORIES: '@ghar_sansar_categories_cache_v2',
   ACTIVE_DISCOUNTS: '@ghar_sansar_active_discounts_cache_v2',
+  BANNERS: '@ghar_sansar_banners_cache_v2',
 };
 
 // Sensible fallback sync TTL (12 hours)
@@ -199,6 +200,33 @@ export async function saveCategoriesToCache(categories: any[]): Promise<void> {
 }
 
 /**
+ * Loads banners from cache.
+ */
+export async function loadBannersFromCache(): Promise<any[] | null> {
+  try {
+    const json = await AsyncStorage.getItem(CACHE_KEYS.BANNERS);
+    if (!json) return null;
+    const list = JSON.parse(json);
+    return Array.isArray(list) && list.length > 0 ? list : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Saves banners to cache.
+ */
+export async function saveBannersToCache(banners: any[]): Promise<void> {
+  try {
+    if (Array.isArray(banners) && banners.length > 0) {
+      await AsyncStorage.setItem(CACHE_KEYS.BANNERS, JSON.stringify(banners));
+    }
+  } catch (err) {
+    console.warn('[ProductCacheService] Failed to cache banners:', err);
+  }
+}
+
+/**
  * Checks whether the cache has expired based on TTL.
  */
 export function isCacheExpired(lastSyncTime: number, ttlMs: number = CACHE_TTL_MS): boolean {
@@ -218,6 +246,7 @@ export async function clearProductCache(): Promise<void> {
       CACHE_KEYS.RETURN_GIFTS,
       CACHE_KEYS.CATEGORIES,
       CACHE_KEYS.ACTIVE_DISCOUNTS,
+      CACHE_KEYS.BANNERS,
     ]);
   } catch (error) {
     console.warn('[ProductCacheService] Failed to clear product cache:', error);

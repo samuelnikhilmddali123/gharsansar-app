@@ -19,6 +19,34 @@ interface BannerData {
   bgGradient?: string[];
 }
 
+// High-Resolution 16:9 Graphic Posters with built-in typography (lightweight optimized assets)
+export const DEFAULT_BANNERS: BannerData[] = [
+  {
+    id: '1',
+    title: 'SONU STEEL COOKWARE',
+    category: 'Sonu Steel Products',
+    image: require('../../assets/banners/steel_cookware_banner.jpg'),
+  },
+  {
+    id: '2',
+    title: 'HERITAGE IDOLS & DECOR',
+    category: 'Kondapalli Toys',
+    image: require('../../assets/banners/rajasthan_idols_banner.jpg'),
+  },
+  {
+    id: '3',
+    title: 'CELLO DINING & BOTTLES',
+    category: 'Cello',
+    image: require('../../assets/banners/cello_bottles_banner.jpg'),
+  },
+  {
+    id: '4',
+    title: 'WATER FOUNTAINS & POTS',
+    category: 'Water Fountains',
+    image: require('../../assets/banners/water_fountain_banner.jpg'),
+  },
+];
+
 interface HeroBannerProps {
   banners?: BannerData[];
   onShopNow: (categoryName: string) => void;
@@ -28,36 +56,20 @@ export const HeroBanner: React.FC<HeroBannerProps> = React.memo(({ banners, onSh
   const [activeIndex, setActiveIndex] = useState(0);
   const scrollRef = useRef<any>(null);
 
-  // High-Resolution 16:9 Graphic Posters with built-in typography
-  const defaultBanners: BannerData[] = [
-    {
-      id: '1',
-      title: 'SONU STEEL COOKWARE',
-      category: 'Sonu Steel Products',
-      image: require('../../assets/banners/sonu banner.png'),
-    },
-    {
-      id: '2',
-      title: 'HERITAGE IDOLS & DECOR',
-      category: 'Kondapalli Toys',
-      image: require('../../assets/banners/rajasthani idol banner.png'),
-    },
-    {
-      id: '3',
-      title: 'CELLO DINING & BOTTLES',
-      category: 'Cello',
-      image: require('../../assets/banners/cello banner.png'),
-    },
-    {
-      id: '4',
-      title: 'WATER FOUNTAINS & POTS',
-      category: 'Water Fountains',
-      image: require('../../assets/banners/water fountain banner.png'),
-    },
-  ];
-
   // Use backend banners when available; gracefully fall back to local high-resolution asset posters
-  const displayBanners = banners && banners.length > 0 ? banners : defaultBanners;
+  const displayBanners = banners && banners.length > 0 ? banners : DEFAULT_BANNERS;
+
+  // Prefetch remote banner URLs into memory-disk cache immediately if any exist
+  useEffect(() => {
+    if (banners && banners.length > 0) {
+      const urls = banners
+        .map(b => (typeof b.image === 'string' && b.image.startsWith('http') ? b.image : null))
+        .filter(Boolean) as string[];
+      if (urls.length > 0) {
+        Image.prefetch(urls, 'memory-disk').catch(() => {});
+      }
+    }
+  }, [banners]);
 
   useEffect(() => {
     if (displayBanners.length <= 1) return;
@@ -91,7 +103,7 @@ export const HeroBanner: React.FC<HeroBannerProps> = React.memo(({ banners, onSh
         }}
       >
         {displayBanners.map((item, idx) => {
-          const fallback = defaultBanners[idx % defaultBanners.length];
+          const fallback = DEFAULT_BANNERS[idx % DEFAULT_BANNERS.length];
           const targetCategory = item.category || fallback.category || 'All';
           const bannerImg = item.image || fallback.image;
           const imageSource = typeof bannerImg === 'string' ? { uri: bannerImg } : bannerImg;
@@ -103,13 +115,15 @@ export const HeroBanner: React.FC<HeroBannerProps> = React.memo(({ banners, onSh
               onPress={() => onShopNow(targetCategory)}
               style={styles.bannerCard}
             >
-              {/* 1. Crystal-Clear 16:9 Poster Graphic (full artwork display) */}
+              {/* 1. Crystal-Clear 16:9 Poster Graphic (full artwork display with memory-disk caching) */}
               <Image
                 source={imageSource}
                 style={StyleSheet.absoluteFill}
                 contentFit="cover"
-                cachePolicy="none"
-                transition={200}
+                cachePolicy="memory-disk"
+                priority={idx === 0 ? 'high' : 'normal'}
+                recyclingKey={item.id ? `banner-${item.id}` : `banner-${idx}`}
+                transition={0}
               />
             </TouchableOpacity>
           );

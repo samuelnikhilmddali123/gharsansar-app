@@ -2,8 +2,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { StyleSheet, View, Text, Animated, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Image } from 'expo-image';
-import { useAssets } from 'expo-asset';
+import { Asset, useAssets } from 'expo-asset';
 import { SPLASH_GIF_BASE64 } from './src/assets/splashGifBase64';
+
+// Pre-warm local hero banner assets in memory immediately on app boot
+Asset.loadAsync([
+  require('./assets/banners/steel_cookware_banner.jpg'),
+  require('./assets/banners/rajasthan_idols_banner.jpg'),
+  require('./assets/banners/cello_bottles_banner.jpg'),
+  require('./assets/banners/water_fountain_banner.jpg'),
+]).catch(() => {});
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { MobileAppProvider, useMobileApp } from './src/context/MobileAppContext';
 import { BottomNavigation } from './src/components/BottomNavigation';
